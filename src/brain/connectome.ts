@@ -178,10 +178,18 @@ export function buildConnectome(seed: number | string): Connectome {
   connectProbability('KC', 'MBON', 0.32, 2.5);
 
   // Visual crossed reflex: left visual space excites the right steering
-  // channel, and right visual space excites the left channel.
+  // channel, and right visual space excites the left channel. Frontal rays
+  // carry the strongest graded drive and brake directly when head-on.
   for (const [sensorIndex, source] of populations.VIS.entries()) {
-    const target = sensorIndex < 12 ? populations.LAL_R[0] : populations.LAL_L[0];
-    add(source, target as number, 5.2);
+    const centrality = 1 - Math.abs(sensorIndex - 11.5) / 11.5;
+    const weight = 3.0 + 4.5 * centrality;
+    const lal = sensorIndex < 12 ? populations.LAL_R[0] : populations.LAL_L[0];
+    const dn = sensorIndex < 12 ? populations.DN[1] : populations.DN[0];
+    add(source, lal as number, weight);
+    add(source, dn as number, weight * 0.9);
+    if (sensorIndex >= 10 && sensorIndex <= 13) {
+      add(source, populations.DN[3] as number, 3.0);
+    }
     add(source, populations.PN[sensorIndex % populations.PN.length] as number, 2.2);
   }
 

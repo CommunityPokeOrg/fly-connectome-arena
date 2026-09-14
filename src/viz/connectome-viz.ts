@@ -1,6 +1,7 @@
 import type { Population } from '../brain/connectome.ts';
 import type { FlyBrain } from '../brain/fly-brain.ts';
 import type { PlasticitySnapshot, RewardEvent } from '../brain/plasticity.ts';
+import type { VisionFrame } from '../game/vision.ts';
 
 const POPULATIONS: Population[] = [
   'ORN',
@@ -119,6 +120,7 @@ export class ConnectomeVisualizer {
   private turnNeedle!: HTMLElement;
   private thrustFill!: HTMLElement;
   private behaviorValue!: HTMLElement;
+  private explorationValue!: HTMLElement;
   private cssWidth = 380;
   private dpr = 1;
   private layout: Layout = this.computeLayout();
@@ -134,7 +136,10 @@ export class ConnectomeVisualizer {
   private hoverNeuron: number | undefined;
   private lastEventKey = '';
 
-  public constructor(private readonly brain: FlyBrain) {
+  public constructor(
+    private readonly brain: FlyBrain,
+    private readonly visionProvider: () => VisionFrame | undefined = () => undefined,
+  ) {
     this.element.className = 'viz-panel';
     this.element.setAttribute('aria-label', 'Connectome telemetry');
     this.canvas.setAttribute('aria-label', 'Neural telemetry charts');
@@ -218,6 +223,11 @@ export class ConnectomeVisualizer {
     behavior.innerHTML = '<span class="motor-name">Behavior</span><span class="behavior-value">At rest</span>';
     this.behaviorValue = behavior.querySelector('.behavior-value') as HTMLElement;
     table.append(behavior);
+    const exploration = document.createElement('div');
+    exploration.className = 'behavior-label';
+    exploration.innerHTML = '<span class="motor-name">exploration drive 0.00–1.00</span><span class="behavior-value">1.00</span>';
+    this.explorationValue = exploration.querySelector('.behavior-value') as HTMLElement;
+    table.append(exploration);
     for (const [key, label] of [
       ['leftRate', 'DN turn-L (DNa02-like)'],
       ['rightRate', 'DN turn-R (DNa02-like)'],
@@ -247,7 +257,7 @@ export class ConnectomeVisualizer {
 
   private computeLayout(): Layout {
     const rates: Section = { top: 0, height: 22 + POPULATIONS.length * 15 + 10 };
-    const sensory: Section = { top: rates.top + rates.height, height: 168 };
+    const sensory: Section = { top: rates.top + rates.height, height: 220 };
     const raster: Section = { top: sensory.top + sensory.height, height: 212 };
     const synaptic: Section = { top: raster.top + raster.height, height: 196 };
     const modulators: Section = { top: synaptic.top + synaptic.height, height: 168 };
@@ -526,6 +536,41 @@ export class ConnectomeVisualizer {
     context.fillText(`VIS ${(populationRates.VIS ?? 0).toFixed(1)} Hz`, ornLeft, section.top + 128);
     context.fillText(`TGT ${(populationRates.TGT ?? 0).toFixed(1)} Hz`, ornLeft, section.top + 142);
     context.fillText(`THR ${(populationRates.THR ?? 0).toFixed(1)} Hz`, ornLeft, section.top + 156);
+
+    const vision = this.visionProvider?.();
+    const stripLeft = 14;
+    const stripWidth = this.cssWidth - 28;
+    const loomingTop = section.top + 126;
+    context.fillStyle = INK.text;
+    context.font = FONT;
+    context.fillText('LC4-like looming', stripLeft, loomingTop);
+    const loomingCell = Math.max(3, stripWidth / 24 - 1);
+    for (let index = 0; index < 24; index += 1) {
+      const value = vision?.looming[index] ?? 0;
+      const x = stripLeft + index * (stripWidth / 24);
+      context.fillStyle = INK.gridSoft;
+      context.fillRect(x, loomingTop + 6, loomingCell, 25);
+      context.fillStyle = INK.inhibitory;
+      context.fillRect(x, loomingTop + 31 - value * 25, loomingCell, value * 25);
+    }
+    context.fillStyle = INK.text;
+    context.fillText('Compound eye', stripLeft, section.top + 172);
+    for (let index = 0; index < 24; index += 1) {
+      const ray = vision?.rays[index];
+      const value = vision?.intensity[index] ?? 0;
+      const x = stripLeft + index * (stripWidth / 24);
+      context.fillStyle = ray?.hit === 'wall'
+        ? '#9a8f7a'
+        : ray?.hit === 'obstacle'
+          ? '#c0a060'
+          : ray?.hit === 'enemy'
+            ? '#a65b4b'
+            : '#6b7280';
+      context.fillRect(x, section.top + 180 + (1 - value) * 28, loomingCell, value * 28);
+    }
+    context.fillStyle = INK.muted;
+    context.font = FONT_SMALL;
+    context.fillText('24 ommatidia · ±120° · raycast', stripLeft, section.top + 216);
   }
 
   private rasterGeometry(): { left: number; width: number; top: number; rowHeight: number } {
@@ -751,6 +796,10 @@ export class ConnectomeVisualizer {
     this.motorReadout.classList.toggle('evading', command.evade);
     if (this.behaviorValue.textContent !== command.behavior) {
       this.behaviorValue.textContent = command.behavior;
+    }
+    const exploration = command.exploration.toFixed(2);
+    if (this.explorationValue.textContent !== exploration) {
+      this.explorationValue.textContent = exploration;
     }
   }
 

@@ -6,7 +6,8 @@ import {
 } from './connectome.ts';
 import { LIFNetwork } from './lif.ts';
 import { PlasticityEngine } from './plasticity.ts';
-import type { SensorReadings } from '../game/sensors.ts';
+import { sensorDirection, type SensorReadings } from '../game/sensors.ts';
+import { signedAngleDifference } from '../core/rng.ts';
 
 export type BehaviorLabel =
   | 'At rest'
@@ -23,6 +24,8 @@ export interface MotorCommand {
   evade: boolean;
   /** Human-readable autonomous behavior state for telemetry. */
   behavior: BehaviorLabel;
+  /** 0..1 drive to explore when no salient cue is present. */
+  exploration: number;
   /** 0..1 octopamine stress drive for erratic evasion. */
   stress: number;
   /** One-shot escape burst when stress crosses the threshold. */
@@ -60,6 +63,10 @@ export class FlyBrain {
   public command: MotorCommand = FlyBrain.neutralCommand();
   public fireCooldown = 0;
   private stepCounter = 0;
+  private lastReadingsOlfactory: number[] = [];
+  private lastReadingsTarget: number[] = [];
+  private lastReadingsThreat: number[] = [];
+  private lastReadingsLooming: number[] = [];
 
   public constructor(seed: number | string) {
     this.connectome = buildConnectome(seed);
@@ -76,6 +83,10 @@ export class FlyBrain {
     const steps = options.steps ?? 16;
     this.fireCooldown = Math.max(0, this.fireCooldown - dt);
     this.inputCurrents.fill(0);
+    this.lastReadingsOlfactory = readings.olfactory;
+    this.lastReadingsTarget = readings.target;
+    this.lastReadingsThreat = readings.threat;
+    this.lastReadingsLooming = readings.looming;
     this.injectSensors(readings);
     this.injectHeading(options.heading, options.headingBumpStrength ?? 22);
     this.injectTonicDrive();
@@ -100,7 +111,7 @@ export class FlyBrain {
   private injectSensors(readings: SensorReadings): void {
     const populations = this.connectome.populations;
     for (const [index, neuron] of populations.VIS.entries()) {
-      this.inputCurrents[neuron] = 260 + (readings.visual[index] ?? 0) * 520;
+      this.inputCurrents[neuron] = 120 + (readings.visual[index] ?? 0) * 620;
     }
     for (const [index, neuron] of populations.TGT.entries()) {
       this.inputCurrents[neuron] = (readings.target[index] ?? 0) * 820;
@@ -109,7 +120,15 @@ export class FlyBrain {
       this.inputCurrents[neuron] = (readings.olfactory[index] ?? 0) * 420;
     }
     for (const [index, neuron] of populations.THR.entries()) {
-      this.inputCurrents[neuron] = (readings.threat[index] ?? 0) * 920;
+      const threat = (readings.threat[index] ?? 0) * 920;
+      const direction = sensorDirection(index, populations.THR.length, -Math.PI, Math.PI);
+      let looming = 0;
+      for (const [rayIndex, ray] of readings.vision.rays.entries()) {
+        if (Math.abs(signedAngleDifference(ray.angle, direction)) <= Math.PI / 8) {
+          looming = Math.max(looming, readings.looming[rayIndex] ?? 0);
+        }
+      }
+      this.inputCurrents[neuron] = threat + looming * 700;
     }
   }
 
@@ -190,6 +209,14 @@ export class FlyBrain {
       this.escapeCooldown = 0.9;
     }
     const evade = rates.evade > 8;
+    const exploration = 1 - clamp(
+      Math.max(0, ...this.lastReadingsOlfactory) * 1.4 +
+      Math.max(0, ...this.lastReadingsTarget) +
+      Math.max(0, ...this.lastReadingsThreat) +
+      Math.max(0, ...this.lastReadingsLooming),
+      0,
+      1,
+    );
     const behavior: BehaviorLabel = escape
       ? 'Escape flight'
       : evade
@@ -207,6 +234,7 @@ export class FlyBrain {
       fire,
       evade,
       behavior,
+      exploration,
       stress,
       escape,
       leftRate: rates.turnLeft,
@@ -238,6 +266,10 @@ export class FlyBrain {
       this.smoothedRates[key] = 0;
     }
     this.plasticity.reset();
+    this.lastReadingsOlfactory = [];
+    this.lastReadingsTarget = [];
+    this.lastReadingsThreat = [];
+    this.lastReadingsLooming = [];
     this.stepCounter = 0;
   }
 
@@ -248,6 +280,7 @@ export class FlyBrain {
       fire: false,
       evade: false,
       behavior: 'At rest',
+      exploration: 1,
       stress: 0,
       escape: false,
       leftRate: 0,

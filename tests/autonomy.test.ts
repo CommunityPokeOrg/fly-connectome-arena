@@ -12,6 +12,7 @@ const stillCommand: MotorCommand = {
   fire: false,
   evade: false,
   behavior: 'At rest',
+  exploration: 1,
   stress: 0,
   escape: false,
   leftRate: 0,
@@ -81,6 +82,13 @@ describe('graded decoder + escape hysteresis', () => {
     target: new Array(12).fill(0),
     olfactory: Object.assign(new Array(16).fill(0), { 12: 1 }),
     threat: new Array(8).fill(0),
+    looming: new Array(24).fill(0),
+    vision: {
+      rays: new Array(24).fill(null).map((_, index) => ({ angle: -Math.PI * (2 / 3) + (Math.PI * (4 / 3) / 24) * (index + 0.5), distance: 9, hit: 'none' as const })),
+      intensity: new Array(24).fill(0),
+      looming: new Array(24).fill(0),
+      range: 9,
+    },
     nearestEnemyAngle: 0,
     nearestFoodAngle: 0,
   };
@@ -113,5 +121,53 @@ describe('graded decoder + escape hysteresis', () => {
     }
     expect(escapeFrames).toBeGreaterThan(0);
     expect(escapeFrames).toBeLessThanOrEqual(3);
+  });
+});
+
+describe('compound-eye navigation drive', () => {
+  const visualReadings = (left: boolean) => ({
+    visual: Array.from({ length: 24 }, (_, index) => left && index >= 6 && index <= 11 ? 0.8 : 0),
+    target: new Array(12).fill(0),
+    olfactory: new Array(16).fill(0),
+    threat: new Array(8).fill(0),
+    looming: new Array(24).fill(0),
+    vision: {
+      rays: new Array(24).fill(null).map((_, index) => ({ angle: -Math.PI * (2 / 3) + (Math.PI * (4 / 3) / 24) * (index + 0.5), distance: 9, hit: 'none' as const })),
+      intensity: new Array(24).fill(0),
+      looming: new Array(24).fill(0),
+      range: 9,
+    },
+    nearestEnemyAngle: 0,
+    nearestFoodAngle: 0,
+  });
+
+  it('turns right away from frontal-left visual salience', () => {
+    const brain = new FlyBrain(7);
+    let command = brain.step(visualReadings(true), { heading: 0, steps: 16 });
+    for (let step = 0; step < 2 * 60; step += 1) {
+      command = brain.step(visualReadings(true), { heading: 0, steps: 16 });
+    }
+    expect(command.turn).toBeGreaterThan(0.15);
+  });
+
+  it('turns left away from frontal-right visual salience', () => {
+    const brain = new FlyBrain(7);
+    const readings = visualReadings(false);
+    readings.visual = readings.visual.map((_, index) => index >= 12 && index <= 17 ? 0.8 : 0);
+    let command = brain.step(readings, { heading: 0, steps: 16 });
+    for (let step = 0; step < 2 * 60; step += 1) {
+      command = brain.step(readings, { heading: 0, steps: 16 });
+    }
+    expect(command.turn).toBeLessThan(-0.15);
+  });
+
+  it('exploration falls with salient input', () => {
+    const brain = new FlyBrain(7);
+    const clear = visualReadings(false);
+    let command = brain.step(clear, { heading: 0, steps: 16 });
+    expect(command.exploration).toBeGreaterThanOrEqual(0.9);
+    const odor = { ...clear, olfactory: Object.assign(new Array(16).fill(0), { 4: 0.8 }) };
+    command = brain.step(odor, { heading: 0, steps: 16 });
+    expect(command.exploration).toBeLessThanOrEqual(0.2);
   });
 });

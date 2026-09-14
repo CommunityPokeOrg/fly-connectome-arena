@@ -1,4 +1,11 @@
 import { clamp, signedAngleDifference, wrap } from '../core/rng.ts';
+import {
+  castCompoundEye,
+  type SensorWorld,
+  type VisionFrame,
+} from './vision.ts';
+
+export type { SensorWorld } from './vision.ts';
 
 export interface SensorEntity {
   x: number;
@@ -8,16 +15,10 @@ export interface SensorEntity {
   active?: boolean;
 }
 
-export interface SensorWorld {
-  flyX: number;
-  flyZ: number;
-  heading: number;
-  arenaRadius: number;
-  entities: readonly SensorEntity[];
-}
-
 export interface SensorReadings {
   visual: number[];
+  looming: number[];
+  vision: VisionFrame;
   target: number[];
   olfactory: number[];
   threat: number[];
@@ -39,14 +40,6 @@ function sampleBins(
 ): number[] {
   const result = Array.from({ length: config.count }, () => 0);
   const nearest = Array.from({ length: config.count }, () => Number.POSITIVE_INFINITY);
-  const width = (config.end - config.start) / config.count;
-  const wallDistance = world.arenaRadius - Math.hypot(world.flyX, world.flyZ);
-  for (let index = 0; index < config.count; index += 1) {
-    const angle = config.start + width * (index + 0.5);
-    if (angle >= -Math.PI && angle <= Math.PI) {
-      nearest[index] = Math.min(nearest[index] ?? Number.POSITIVE_INFINITY, wallDistance);
-    }
-  }
   for (const entity of world.entities) {
     if (entity.active === false || !filter(entity)) {
       continue;
@@ -93,13 +86,12 @@ function nearestAngle(
   return bestAngle;
 }
 
-export function readSensors(world: SensorWorld): SensorReadings {
+export function readSensors(world: SensorWorld, previousVision?: VisionFrame): SensorReadings {
+  const vision = castCompoundEye(world, previousVision);
   return {
-    visual: sampleBins(
-      world,
-      { count: 24, start: -Math.PI * (2 / 3), end: Math.PI * (2 / 3), range: 9 },
-      (entity) => entity.kind === 'obstacle' || entity.kind === 'enemy',
-    ),
+    visual: vision.intensity,
+    looming: vision.looming,
+    vision,
     target: sampleBins(
       world,
       { count: 12, start: -Math.PI / 2, end: Math.PI / 2, range: 15 },

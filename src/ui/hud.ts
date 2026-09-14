@@ -69,6 +69,7 @@ export class HUD {
       ['Start', 'Start simulation', this.onStart],
       ['Camera', 'Cycle camera mode', () => this.setCamera(this.camera.cycle())],
       ['Telemetry', 'Toggle connectome telemetry panel', () => this.toggleVisualizer()],
+      ['Eyes', 'Toggle compound-eye raycast overlay', () => this.game.toggleVisionDebug()],
       ['Mute', 'Toggle synthesized audio', () => this.toggleMute()],
       ['Reset', 'Reset with current seed', this.onRestart],
       ['Arena', 'Cycle arena environment', () => {
@@ -97,7 +98,7 @@ export class HUD {
         <div class="instruction-grid">
           <span><b>Space</b> start / restart</span><span><b>P</b> pause</span>
           <span><b>C</b> camera</span><span><b>V</b> telemetry panel</span>
-          <span><b>M</b> mute</span><span><b>[ ]</b> simulation speed</span>
+          <span><b>O</b> compound-eye rays</span><span><b>M</b> mute</span><span><b>[ ]</b> simulation speed</span>
           <span><b>R</b> reset</span>
         </div>
         <button class="primary-button" type="button">Begin simulation</button>

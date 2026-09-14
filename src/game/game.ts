@@ -3,11 +3,13 @@ import { AudioSynth } from '../core/audio.ts';
 import { clamp } from '../core/rng.ts';
 import { FlyBrain, type MotorCommand } from '../brain/fly-brain.ts';
 import { readSensors, type SensorEntity } from './sensors.ts';
+import { VISION_RANGE, type VisionFrame } from './vision.ts';
 import { sphereSphere } from './collisions.ts';
 import { Arena } from './arena.ts';
 import { Enemies } from './enemies.ts';
 import { Fly } from './fly.ts';
 import { Hazards } from './hazards.ts';
+import { VisionDebug } from '../viz/vision-debug.ts';
 import {
   ArenaStateMachine,
   type ArenaState,
@@ -46,12 +48,20 @@ export class Game {
   public readonly brain: FlyBrain;
   public readonly audio = new AudioSynth();
   public readonly sequence: ArenaStateMachine;
+  public readonly visionDebug: VisionDebug;
+  public lastVision: VisionFrame = {
+    rays: [],
+    intensity: [],
+    looming: [],
+    range: VISION_RANGE,
+  };
   public lastEvent: GameEvent | undefined;
   public victoryCaption = '';
   private readonly debugWin: boolean;
   private waveKills = 0;
   private fireCooldown = 0;
   private waveDelay = 0;
+  private visionDebugVisible = false;
 
   public constructor(
     public readonly arena: Arena,
@@ -63,6 +73,7 @@ export class Game {
     this.fly = new Fly(arena.scene, arena.rng.fork(0xf17));
     this.enemies = new Enemies(arena.scene, arena.rng.fork(0x334455));
     this.hazards = new Hazards(arena.scene, arena.rng.fork(0x778899), arena.radius);
+    this.visionDebug = new VisionDebug(arena.scene);
     this.sequence = new ArenaStateMachine({
       eliminate: (target) => {
         this.enemies.eliminate(target.id);
@@ -83,6 +94,9 @@ export class Game {
     window.addEventListener('keydown', (event) => {
       if (event.key.toLowerCase() === 'p') {
         this.togglePause();
+      }
+      if (event.key.toLowerCase() === 'o') {
+        this.toggleVisionDebug();
       }
       if (event.key === '[') {
         this.simulationSpeed = clamp(this.simulationSpeed - 0.5, 0.5, 4);
@@ -113,6 +127,11 @@ export class Game {
     else if (this.state === 'paused') this.sequence.resume();
   }
 
+  public toggleVisionDebug(): void {
+    this.visionDebugVisible = !this.visionDebugVisible;
+    this.visionDebug.setVisible(this.visionDebugVisible);
+  }
+
   public reset(): void {
     this.sequence.reset();
     this.state = 'title';
@@ -131,6 +150,9 @@ export class Game {
     this.enemies.reset();
     this.hazards.reset();
     this.lastEvent = undefined;
+    this.lastVision = { rays: [], intensity: [], looming: [], range: VISION_RANGE };
+    this.visionDebug.setVisible(false);
+    this.visionDebugVisible = false;
   }
 
   public fixedStep(dt: number): void {
@@ -162,7 +184,9 @@ export class Game {
       heading: this.fly.heading,
       arenaRadius: this.arena.radius,
       entities,
-    });
+    }, this.lastVision);
+    this.lastVision = readings.vision;
+    this.visionDebug.update({ x: this.fly.position.x, z: this.fly.position.z, heading: this.fly.heading }, this.lastVision);
     const command = this.brain.step(
       readings,
       { heading: this.fly.heading, steps: 16 },

@@ -40,7 +40,7 @@ renderer.toneMappingExposure = 1.0;
 const camera = new GameCamera(canvas);
 const brain = new FlyBrain(seed);
 const game = new Game(arena, brain, { debugWin: params.get('debug') === 'win' });
-const visualizer = new ConnectomeVisualizer(brain);
+const visualizer = new ConnectomeVisualizer(brain, () => game.lastVision);
 app.append(visualizer.element);
 const hud = new HUD(
   game,

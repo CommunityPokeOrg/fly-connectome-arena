@@ -15,7 +15,9 @@ import {
   avoidCircles,
   containWithinCircle,
   scale,
+  wander,
   type SteeringAgent,
+  type WanderState,
 } from './steering.ts';
 
 export interface FlyUpdateResult {
@@ -36,6 +38,7 @@ export class Fly {
   public radius = 0.62;
   public readonly muzzle = new Vector3();
   private readonly insectRig: InsectRig;
+  private readonly wanderState: WanderState = { angle: 0 };
   private turnSmoothed = 0;
   private circleAccumulator = 0;
   private straightTimer = 0;
@@ -103,15 +106,21 @@ export class Fly {
       thrust = Math.max(thrust, 1.0);
     }
 
-    // Reflex steering layer: the connectome command stays primary, but an
-    // obstacle/containment force projected onto the lateral axis nudges the
-    // fly aside from imminent collisions it would otherwise fly into.
     const agent: SteeringAgent = {
       position: { x: this.position.x, z: this.position.z },
       velocity: { x: this.velocity.x, z: this.velocity.z },
       maxSpeed: 8,
       maxForce: 12,
     };
+    if (command.exploration > 0) {
+      const wanderForce = wander(agent, this.wanderState, dt, () => this.rng.next());
+      const lateralWander = wanderForce.x * Math.cos(this.heading) - wanderForce.z * Math.sin(this.heading);
+      appliedTurn += clamp(lateralWander * 0.05, -0.35, 0.35) * command.exploration;
+    }
+
+    // Reflex steering layer: the connectome command stays primary, but an
+    // obstacle/containment force projected onto the lateral axis nudges the
+    // fly aside from imminent collisions it would otherwise fly into.
     const reflex = add(
       avoidCircles(agent, obstacles, 2.6),
       scale(containWithinCircle(agent, arenaRadius, 2.5), 1.5),
@@ -128,6 +137,9 @@ export class Fly {
     this.reflexTimer = Math.max(0, this.reflexTimer - dt);
     if (this.reflexTimer > 0) {
       appliedTurn = this.reflexSide * 0.9 + appliedTurn * 0.25;
+    }
+    if (command.exploration > 0.7 && this.straightTimer <= 0 && this.reflexTimer <= 0 && this.escapeTimer <= 0) {
+      thrust = Math.min(thrust, 0.7);
     }
 
     this.heading += appliedTurn * turnRate * dt;
@@ -215,6 +227,7 @@ export class Fly {
     this.evadeTimer = 0;
     this.escapeTimer = 0;
     this.reflexTimer = 0;
+    this.wanderState.angle = 0;
     this.group.visible = true;
   }
 
