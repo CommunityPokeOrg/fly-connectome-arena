@@ -1,13 +1,10 @@
 import {
   AdditiveBlending,
-  ConeGeometry,
   Group,
   Mesh,
   MeshBasicMaterial,
-  MeshStandardMaterial,
   PointLight,
   SphereGeometry,
-  TorusGeometry,
   Vector3,
   type Scene,
 } from 'three';
@@ -34,6 +31,7 @@ export interface Enemy {
   orbitAngle: number;
   orbitRadius: number;
   insect: InsectRig;
+  previousPosition: Vector3;
 }
 
 export interface Explosion {
@@ -72,10 +70,8 @@ export class Enemies {
     const angle = this.rng.range(-Math.PI, Math.PI);
     const distance = this.rng.range(arenaRadius * 0.55, arenaRadius - 2);
     const group = new Group();
-    const body = this.createEnemyMesh(kind, index);
     const insect = createInsectMesh(kind === 'drone' ? 'drone-hornet' : kind, index * 0.7);
     insect.root.scale.setScalar(kind === 'beetle' ? 1.25 : kind === 'drone' ? 1.08 : 1);
-    group.add(body);
     group.add(insect.root);
     group.position.set(Math.cos(angle) * distance, kind === 'drone' ? 1.5 : 1.1, Math.sin(angle) * distance);
     this.scene.add(group);
@@ -85,7 +81,7 @@ export class Enemies {
     this.items.push({
       id: `wave-${wave}-enemy-${index}-${this.items.length}`,
       group,
-      body,
+      body: insect.thorax,
       kind,
       health,
       maxHealth: health,
@@ -98,55 +94,8 @@ export class Enemies {
       orbitAngle: angle,
       orbitRadius: distance,
       insect,
+      previousPosition: group.position.clone(),
     });
-  }
-
-  private createEnemyMesh(kind: EnemyKind, index: number): Mesh {
-    if (kind === 'wasp' || kind === 'beetle') {
-      const body = new Mesh(
-        new SphereGeometry(0.42, 12, 8),
-        new MeshStandardMaterial({
-          color: kind === 'beetle' ? 0x15516d : 0xf36b28,
-          emissive: 0x7b180c,
-          emissiveIntensity: 1.7,
-        }),
-      );
-      body.scale.set(kind === 'beetle' ? 1.2 : 1.5, kind === 'beetle' ? 0.9 : 0.7, 0.8);
-      const wingMaterial = new MeshBasicMaterial({
-        color: 0xffc04d,
-        transparent: true,
-        opacity: 0.48,
-        side: 2,
-      });
-      const wingGeometry = new TorusGeometry(kind === 'beetle' ? 0.34 : 0.42, 0.045, 5, 18, Math.PI);
-      const wingLeft = new Mesh(wingGeometry, wingMaterial);
-      const wingRight = new Mesh(wingGeometry, wingMaterial.clone());
-      wingLeft.position.x = -0.33;
-      wingRight.position.x = 0.33;
-      wingLeft.rotation.y = Math.PI / 2;
-      wingRight.rotation.y = -Math.PI / 2;
-      body.add(wingLeft, wingRight);
-      return body;
-    }
-    const material = new MeshStandardMaterial({
-      color: index % 2 === 0 ? 0x923fff : 0x355bff,
-      emissive: 0x321184,
-      emissiveIntensity: 2,
-      metalness: 0.6,
-      roughness: 0.25,
-    });
-    const body = new Mesh(new ConeGeometry(0.62, 1.1, 8), material);
-    body.rotation.x = Math.PI / 2;
-    const eye = new Mesh(
-      new SphereGeometry(0.15, 8, 6),
-      new MeshBasicMaterial({ color: 0xffec61, blending: AdditiveBlending }),
-    );
-    eye.position.z = -0.48;
-    body.add(eye);
-    const light = new PointLight(0x894aff, 2, 4);
-    light.position.z = 0.1;
-    body.add(light);
-    return body;
   }
 
   public update(dt: number, flyPosition: Vector3, arenaRadius: number): void {
@@ -163,6 +112,7 @@ export class Enemies {
       const dx = flyPosition.x - enemy.group.position.x;
       const dz = flyPosition.z - enemy.group.position.z;
       const distance = Math.hypot(dx, dz);
+      enemy.previousPosition.copy(enemy.group.position);
       if (enemy.kind === 'wasp') {
         this.updateWasp(enemy, dx, dz, dt);
       } else if (enemy.kind === 'beetle') {
@@ -175,9 +125,16 @@ export class Enemies {
       enemy.group.position.y = enemy.kind === 'drone'
         ? 1.35 + Math.sin(this.elapsed * 2 + enemy.phase) * 0.3
         : 1.05 + Math.sin(this.elapsed * 6 + enemy.phase) * 0.16;
-      enemy.group.rotation.y += dt * (enemy.kind === 'drone' ? 0.4 : 2.8);
-      const material = enemy.body.material as MeshStandardMaterial;
-      material.emissiveIntensity = enemy.hitFlash > 0 ? 6 : 1.7;
+      const movedX = enemy.group.position.x - enemy.previousPosition.x;
+      const movedZ = enemy.group.position.z - enemy.previousPosition.z;
+      const moved = Math.hypot(movedX, movedZ);
+      const targetAngle = enemy.kind === 'drone'
+        ? Math.atan2(flyPosition.x - enemy.group.position.x, flyPosition.z - enemy.group.position.z)
+        : Math.atan2(movedX, movedZ);
+      if (enemy.kind === 'drone' || moved > 1e-4) {
+        const delta = Math.atan2(Math.sin(targetAngle - enemy.group.rotation.y), Math.cos(targetAngle - enemy.group.rotation.y));
+        enemy.group.rotation.y += delta * Math.min(1, dt * 8);
+      }
       animateInsect(enemy.insect, dt, enemy.speed);
     }
     this.projectiles.update(dt, arenaRadius);

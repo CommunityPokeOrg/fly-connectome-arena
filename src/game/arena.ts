@@ -77,9 +77,11 @@ export class Arena {
   private createLighting(): void {
     this.scene.add(new HemisphereLight(0x668bc8, 0x090d1c, 1.5));
     this.scene.add(new AmbientLight(0x26365f, 0.7));
-    const moon = new DirectionalLight(0x5796ff, 1.2);
+    const moon = new DirectionalLight(0x9fc4ff, 2.4);
     moon.position.set(-8, 16, 4);
     moon.castShadow = true;
+    moon.shadow.bias = -0.0005;
+    moon.shadow.normalBias = 0.02;
     moon.shadow.mapSize.set(1024, 1024);
     moon.shadow.camera.left = -22;
     moon.shadow.camera.right = 22;
@@ -106,6 +108,7 @@ export class Arena {
       }),
     );
     floor.position.y = -0.12;
+    floor.receiveShadow = true;
     this.scene.add(floor);
     const grid = new GridHelper(this.radius * 2, 36, 0x164a73, 0x0a213d);
     grid.position.y = 0.01;
@@ -174,6 +177,8 @@ export class Arena {
           roughness: 0.32,
         }),
       );
+      platform.castShadow = true;
+      platform.receiveShadow = true;
       platform.position.set(Math.cos(angle) * distance, 0.25 + (index % 2) * 0.18, Math.sin(angle) * distance);
       this.landmarks.add(platform);
       this.obstacles.push({
@@ -189,6 +194,8 @@ export class Arena {
         new CylinderGeometry(0.07, 0.12, 2.8, 8),
         new MeshStandardMaterial({ color: 0x4eeeff, emissive: 0x32dff4, emissiveIntensity: 2 }),
       );
+      post.castShadow = true;
+      post.receiveShadow = true;
       post.position.set(platform.position.x + 0.8, 1.4, platform.position.z);
       this.landmarks.add(post);
     }
@@ -232,6 +239,8 @@ export class Arena {
         );
       object.position.set(Math.cos(angle) * distance, height / 2, Math.sin(angle) * distance);
       object.rotation.set(obstacleRng.range(0, 0.5), obstacleRng.range(0, Math.PI), obstacleRng.range(0, 0.5));
+      object.castShadow = true;
+      object.receiveShadow = true;
       this.landmarks.add(object);
       this.obstacles.push({
         id: `obstacle-${index}`,

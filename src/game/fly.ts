@@ -1,13 +1,8 @@
 import {
-  AdditiveBlending,
-  BoxGeometry,
   Color,
   Group,
   Mesh,
-  MeshBasicMaterial,
   MeshStandardMaterial,
-  PlaneGeometry,
-  SphereGeometry,
   Vector3,
   type Scene,
 } from 'three';
@@ -34,14 +29,7 @@ export class Fly {
   public score = 0;
   public radius = 0.62;
   public readonly muzzle = new Vector3();
-  private readonly wingLeft: Mesh;
-  private readonly wingRight: Mesh;
-  private readonly wingGlowLeft: Mesh;
-  private readonly wingGlowRight: Mesh;
   private readonly body: Mesh;
-  private readonly head: Mesh;
-  private wingPhase = 0;
-  private hurtFlash = 0;
   private evadeTimer = 0;
   private readonly insectRig: InsectRig;
 
@@ -49,94 +37,9 @@ export class Fly {
     this.insectRig = createInsectMesh('fly', 0.4);
     this.insectRig.root.scale.setScalar(1.12);
     this.group.add(this.insectRig.root);
-    this.body = new Mesh(
-      new SphereGeometry(0.54, 20, 14),
-      new MeshStandardMaterial({
-        color: 0x2ad8bd,
-        emissive: 0x0b6059,
-        emissiveIntensity: 1.4,
-        roughness: 0.4,
-        metalness: 0.5,
-      }),
-    );
-    this.body.scale.set(1.45, 0.72, 1);
-    this.group.add(this.body);
-
-    this.head = new Mesh(
-      new SphereGeometry(0.38, 16, 12),
-      new MeshStandardMaterial({
-        color: 0x202941,
-        emissive: 0x131933,
-        emissiveIntensity: 1.4,
-      }),
-    );
-    this.head.position.z = -0.56;
-    this.group.add(this.head);
-    this.createEyes();
-    this.createAntennae();
-
-    const wingMaterial = new MeshStandardMaterial({
-      color: 0x85f7ff,
-      emissive: 0x147f9e,
-      emissiveIntensity: 1.2,
-      transparent: true,
-      opacity: 0.36,
-      side: 2,
-    });
-    this.wingLeft = new Mesh(new PlaneGeometry(1.7, 0.7), wingMaterial);
-    this.wingRight = new Mesh(new PlaneGeometry(1.7, 0.7), wingMaterial.clone());
-    this.wingLeft.position.set(-0.68, 0.38, 0.05);
-    this.wingRight.position.set(0.68, 0.38, 0.05);
-    this.wingLeft.rotation.y = -0.18;
-    this.wingRight.rotation.y = 0.18;
-    this.group.add(this.wingLeft, this.wingRight);
-
-    const glowMaterial = new MeshBasicMaterial({
-      color: 0x49f2ff,
-      transparent: true,
-      opacity: 0.46,
-      blending: AdditiveBlending,
-      side: 2,
-    });
-    this.wingGlowLeft = new Mesh(new PlaneGeometry(1.8, 0.08), glowMaterial);
-    this.wingGlowRight = new Mesh(new PlaneGeometry(1.8, 0.08), glowMaterial.clone());
-    this.wingGlowLeft.position.set(-0.68, 0.4, 0.03);
-    this.wingGlowRight.position.set(0.68, 0.4, 0.03);
-    this.group.add(this.wingGlowLeft, this.wingGlowRight);
-
-    const abdomenStripe = new Mesh(
-      new BoxGeometry(0.65, 0.12, 0.7),
-      new MeshBasicMaterial({ color: 0xffd447 }),
-    );
-    abdomenStripe.position.y = 0.13;
-    this.group.add(abdomenStripe);
+    this.body = this.insectRig.thorax;
     this.group.position.set(0, 0.9, 0);
     scene.add(this.group);
-  }
-
-  private createEyes(): void {
-    const eyeMaterial = new MeshStandardMaterial({
-      color: 0xff274f,
-      emissive: 0xc90842,
-      emissiveIntensity: 2.8,
-      roughness: 0.2,
-    });
-    for (const side of [-1, 1]) {
-      const eye = new Mesh(new SphereGeometry(0.14, 10, 8), eyeMaterial);
-      eye.position.set(side * 0.23, 0.08, -0.82);
-      this.group.add(eye);
-    }
-  }
-
-  private createAntennae(): void {
-    const material = new MeshBasicMaterial({ color: 0xffb24a });
-    for (const side of [-1, 1]) {
-      const antenna = new Mesh(new BoxGeometry(0.025, 0.025, 0.55), material);
-      antenna.position.set(side * 0.15, 0.28, -0.84);
-      antenna.rotation.x = side * 0.32;
-      antenna.rotation.y = side * 0.18;
-      this.group.add(antenna);
-    }
   }
 
   public update(
@@ -185,29 +88,13 @@ export class Fly {
     }
     this.group.rotation.y = this.heading;
     this.group.rotation.z = -requestedTurn * 0.09;
-    this.animateWings(dt);
     animateInsect(this.insectRig, dt, Math.max(0.2, this.speed));
     this.updateMuzzle(direction);
-    this.hurtFlash = Math.max(0, this.hurtFlash - dt);
-    (this.body.material as MeshStandardMaterial).emissiveIntensity =
-      this.hurtFlash > 0 ? 4.2 : 1.4;
     return {
       wallHit: bounded.collided,
       obstacleHit,
       damage: bounded.collided ? 4 : obstacleHit ? 10 : 0,
     };
-  }
-
-  private animateWings(dt: number): void {
-    this.wingPhase += dt * 64;
-    const flap = Math.sin(this.wingPhase) * 0.34;
-    this.wingLeft.rotation.z = -0.22 + flap;
-    this.wingRight.rotation.z = 0.22 - flap;
-    this.wingGlowLeft.rotation.z = -0.22 + flap;
-    this.wingGlowRight.rotation.z = 0.22 - flap;
-    const scale = 0.92 + Math.sin(this.wingPhase * 2) * 0.08;
-    this.wingLeft.scale.y = scale;
-    this.wingRight.scale.y = scale;
   }
 
   private updateMuzzle(direction: Vector3): void {
@@ -217,7 +104,6 @@ export class Fly {
 
   public takeDamage(amount: number): boolean {
     this.health = Math.max(0, this.health - amount);
-    this.hurtFlash = 0.15;
     flashInsect(this.insectRig);
     if (this.health > 0) {
       return false;
