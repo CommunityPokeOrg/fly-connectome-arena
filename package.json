@@ -1,0 +1,23 @@
+{
+  "name": "fly-connectome-arena",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "three": "0.179.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.3",
+    "@types/three": "0.179.0",
+    "typescript": "5.8.3",
+    "vite": "6.3.5",
+    "vitest": "3.1.2"
+  }
+}
