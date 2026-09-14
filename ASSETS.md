@@ -1,13 +1,12 @@
 # Third-party asset provenance
 
-All third-party files under `public/models/`, `public/env/`, and
-`public/textures/` are released under the **Creative Commons CC0 1.0
-Universal** public-domain dedication
+All third-party files under `public/models/` and `public/env/` are released
+under the **Creative Commons CC0 1.0 Universal** public-domain dedication
 (https://creativecommons.org/publicdomain/zero/1.0/). CC0 imposes no
 attribution requirement, but the sources are recorded here so the provenance
-of every redistributed file is verifiable. The only textures generated
-procedurally at runtime are small utility maps (wing venation, nectar, spot
-masks) that have no external source.
+of every redistributed file is verifiable. The only texture generated
+procedurally at runtime is the wing-venation map, which has no external
+source.
 
 ## Insect models (Poly Pizza)
 
@@ -47,56 +46,73 @@ If a model fails to load (offline, blocked asset host, unit tests in Node),
 `src/game/insects.ts` falls back to the procedural multi-part insect rig so
 the game stays playable.
 
-## Environment props (Poly Pizza)
+## Arena architecture (Kenney Building Kit)
 
-Verified with the same method as the insect models (`model.Licence ==
-"CC0 1.0"` in the page state, header "Public Domain (CC0)").
+Source page: https://kenney.nl/assets/building-kit. Direct archive:
+https://kenney.nl/media/pages/assets/building-kit/0de7aaa492-1743244741/kenney_building-kit.zip
+The `License.txt` inside the archive reads:
 
-| File | Title | Creator | Source page | License | Verified | SHA-256 |
-| --- | --- | --- | --- | --- | --- | --- |
-| `public/models/rock.glb` | Rock | Quaternius | https://poly.pizza/m/34W5ymEePk | CC0 1.0 | 2026-09-14 | `b51a7737c6322b241336c621e0568344c58d34d4e741fc2e0ca176763b852ff7` |
-| `public/models/rock-large.glb` | Rock Large | Quaternius | https://poly.pizza/m/54jZKTAt5p | CC0 1.0 | 2026-09-14 | `c4e9f04c04419e67e919c4533dfd6044abc5f0640afa9d0e174cf474285d380c` |
-| `public/models/flower-bushes.glb` | Flower Bushes | Quaternius | https://poly.pizza/m/1X06RgvSr6 | CC0 1.0 | 2026-09-14 | `71d438bf6693a76c6dc5e8d85417d9b738a7d85eb643358a8937c9ee872953b5` |
+```text
+License: (Creative Commons Zero, CC0)
+http://creativecommons.org/publicdomain/zero/1.0/
+You can use this content for personal, educational, and commercial purposes.
+```
 
-Download URLs: rock.glb — https://static.poly.pizza/0ffcfce1-6983-4cb1-b055-77f71d50f3f1.glb;
-rock-large.glb — https://static.poly.pizza/c14651f6-9ef8-41e8-8aca-cafed61d9ca2.glb;
-flower-bushes.glb — https://static.poly.pizza/029d08a8-f7de-47ab-b00f-34970698ce21.glb.
+| File | Kit piece | SHA-256 |
+| --- | --- | --- |
+| `public/models/kit/floor.glb` | floor (2×0.1×2) | `fbe8e907e502381db5d9f87676ef9e34522e35fc95a401a754d3e4984819338b` |
+| `public/models/kit/wall.glb` | wall (0.1×2.4×2) | `769a02a70327132ba864c04299631c65fb08e96e01e1796ba73ddf7f44679a36` |
+| `public/models/kit/wall-window-square.glb` | square window wall | `099d332de4c632cb03692140f9a4004b5d6508cea6a7e3a80268564976cc8b7e` |
+| `public/models/kit/column.glb` | column (0.5×2.4×0.5) | `f2bbc1799caa57c433f18b4b35ed69b9a464285eefe2c291cec04b8a01795f30` |
+| `public/models/kit/wall-low.glb` | low wall partition (0.1×1.2×2) | `21954aa215ae8243126be5a7aff9a48552134c399e1b16c9d46f807ae20b8ca3` |
+| `public/models/kit/detail-pipe.glb` | pipe detail | `d380dc7c5b7960ad537633bede26420ca311afa7b453827bf9e4032ca52d724f` |
+| `public/models/kit/Textures/colormap.png` | shared colormap (relative URI referenced by the kit GLBs) | `01741a46a279bef667de3143ee653d0073ed7cae925d88341281391d9220092b` |
 
-Usage: `rock.glb` / `rock-large.glb` dress the arena's obstacle columns and
-boundary (collision cylinders are unchanged; the meshes are scaled to the
-existing radii). `flower-bushes.glb` decorates the nectar (food) sites.
+Usage: instanced floor tiles cover the arena floor, wall and window pieces
+form the 24-sided boundary polygon, columns mark polygon vertices and an
+inner ring, low walls form radial partitions, and pipes decorate the
+perimeter. Materials are neutralized on load (metalness 0, roughness ≥0.75,
+no emissive).
 
-## Environment map and PBR textures (Poly Haven)
+## Interior obstacles (OpenGameArt 3D Interior Home Assets)
+
+Source page: https://opengameart.org/content/3d-interior-home-assets
+(creator: mabaci). Direct archive:
+https://opengameart.org/sites/default/files/homeinteriorassets.zip
+The page lists `License(s): CC0` and the bundled license (also shipped as
+`public/models/interior/LICENSE.txt`) reads `License: CC0 1.0 Universal
+(Public Domain Dedication)`.
+
+| File | Piece | SHA-256 |
+| --- | --- | --- |
+| `public/models/interior/table.glb` | lab bench | `968001befa285aca1500ad442cda52dfd10ad3893f6176fff81525cce949e54d` |
+| `public/models/interior/bookcase.glb` | wall bookcase | `44edd82ab573d272efe54512a812fe282305e941b70c301932e6f65f4e2c47e0` |
+| `public/models/interior/shelf.glb` | decorative wall shelf | `2e4e36eaf68cc8c285912bad8af88bacd3f66dcaa48cd5b5f05a733fe04edcbd` |
+| `public/models/interior/LICENSE.txt` | license text | `211a6f058dbf80c0bd88e7b753c7578b7ea068eecb603b699a4677a58239d2a9` |
+
+Usage: tables are scaled to a 3-unit long side and placed as lab benches,
+bookcases sit against the wall interior, and shelves decorate wall segments.
+Bench and bookcase positions carry matching collision circles.
+
+## Environment map (Poly Haven)
 
 Every asset on Poly Haven is published under CC0 1.0
-(https://polyhaven.com/license). Files were fetched through the public API
-(`https://api.polyhaven.com/files/<slug>`), which returned the `dl.polyhaven.org`
-URLs below; authorship comes from `https://api.polyhaven.com/info/<slug>`.
+(https://polyhaven.com/license). The file was fetched through the public API
+(`https://api.polyhaven.com/files/<slug>`), which returned the
+`dl.polyhaven.org` URL below; authorship comes from
+`https://api.polyhaven.com/info/<slug>`.
 
 | File | Asset | Author | Source page | License | Verified | SHA-256 |
 | --- | --- | --- | --- | --- | --- | --- |
 | `public/env/abandoned_greenhouse_1k.hdr` | Abandoned Greenhouse (HDRI, 1k) | Andreas Mischok | https://polyhaven.com/a/abandoned_greenhouse | CC0 1.0 | 2026-09-14 | `d6c3d214ecbb76a1e132bc9b5afe7d1c98fdb5f106ff598077f23bd3e566b466` |
-| `public/textures/forest_floor_diff_1k.jpg` | Forest Floor — diffuse | eye-candy.xyz | https://polyhaven.com/a/forest_floor | CC0 1.0 | 2026-09-14 | `f12e5adea1741f9eb7a528bfc621f8267885b9530b74c3a8afdb823899bdbf0b` |
-| `public/textures/forest_floor_nor_gl_1k.jpg` | Forest Floor — normal (GL) | eye-candy.xyz | https://polyhaven.com/a/forest_floor | CC0 1.0 | 2026-09-14 | `681f3de8c756c4d19bcda33039f953295498f38b1425ce9d56b37d6f97f6e518` |
-| `public/textures/forest_floor_rough_1k.jpg` | Forest Floor — roughness | eye-candy.xyz | https://polyhaven.com/a/forest_floor | CC0 1.0 | 2026-09-14 | `ece0b331f08c03f3edcd8ab6815b74a5ae20768beef64cd4f96a5b2fa26e116e` |
-| `public/textures/mossy_stone_wall_diff_1k.jpg` | Mossy Stone Wall — diffuse | Amal Kumar | https://polyhaven.com/a/mossy_stone_wall | CC0 1.0 | 2026-09-14 | `7240e55cfc662ea403600fc7d5143f72983fbe8098d55fc6ccae75d21421dce4` |
-| `public/textures/mossy_stone_wall_nor_gl_1k.jpg` | Mossy Stone Wall — normal (GL) | Amal Kumar | https://polyhaven.com/a/mossy_stone_wall | CC0 1.0 | 2026-09-14 | `e159e429269bc933743ee47051b4081261e6131e994242bf26e05ab0a0df4542` |
-| `public/textures/mossy_stone_wall_rough_1k.jpg` | Mossy Stone Wall — roughness | Amal Kumar | https://polyhaven.com/a/mossy_stone_wall | CC0 1.0 | 2026-09-14 | `06b19bedb07c6f81acdd8a461e73e7c3d5bfa0afedba8b4e9bda9cb50fb0b1fb` |
-| `public/textures/bark_brown_02_diff_1k.jpg` | Bark Brown 02 — diffuse | Rob Tuytel | https://polyhaven.com/a/bark_brown_02 | CC0 1.0 | 2026-09-14 | `920fa0bed0c9d78c1d530e99795113afd532d7db746de440f4a85d7c83ed0f1a` |
-| `public/textures/bark_brown_02_nor_gl_1k.jpg` | Bark Brown 02 — normal (GL) | Rob Tuytel | https://polyhaven.com/a/bark_brown_02 | CC0 1.0 | 2026-09-14 | `0d5e691e8ad8bcd093a3587887fda2a6b4a948b5708a4f256f7919584c6eb857` |
-| `public/textures/bark_brown_02_rough_1k.jpg` | Bark Brown 02 — roughness | Rob Tuytel | https://polyhaven.com/a/bark_brown_02 | CC0 1.0 | 2026-09-14 | `68125592de36e15bae7aa6db85c4d135aeb7e5653199ba226483a70f6d69837d` |
 
-Download URLs follow the pattern
-`https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/<slug>_1k.hdr` and
-`https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/<slug>/<slug>_<map>_1k.jpg`.
-The 1k resolutions were chosen deliberately to keep the deployed bundle small.
+Download URL:
+`https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/abandoned_greenhouse_1k.hdr`.
 
-Usage: the HDRI is loaded with `RGBELoader` and used as `scene.environment`
-(image-based lighting / reflections) with a low-intensity blurred copy as the
-background; the forest-floor set textures the arena floor, the mossy stone
-set textures the boundary wall and stone obstacles, and the bark set textures
-the reed/post obstacles. If any file fails to load the renderer falls back to
-the analytic lights and flat materials.
+Usage: the HDRI is loaded with `RGBELoader` and used only as
+`scene.environment` (image-based lighting / reflections). The scene
+background is a flat neutral color. If the file fails to load the renderer
+falls back to the analytic lights and flat materials.
 
 ## Excluded
 

@@ -1,4 +1,6 @@
 import {
+  BoxGeometry,
+  BufferGeometry,
   CylinderGeometry,
   Color,
   DirectionalLight,
@@ -6,24 +8,20 @@ import {
   FogExp2,
   Group,
   HemisphereLight,
+  InstancedMesh,
+  Material,
   Mesh,
   MeshPhysicalMaterial,
   MeshStandardMaterial,
-  RepeatWrapping,
+  Object3D,
   Scene,
   SphereGeometry,
-  SRGBColorSpace,
-  TextureLoader,
-  TorusGeometry,
-  type Object3D,
-  type Texture,
 } from 'three';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { RNG } from '../core/rng.ts';
-import { createBarkTexture, createMossFloorTexture, createStoneTexture } from './textures.ts';
-import { getTemplate } from './insect-assets.ts';
+import { getTemplate, type ModelAssetName } from './insect-assets.ts';
 
-export type ArenaVariant = 'Moss Hollow' | 'Amber Grove';
+export type ArenaVariant = 'Bench Lab' | 'Night Lab';
 
 export interface ArenaObstacle {
   id: string;
@@ -45,7 +43,38 @@ export interface FoodPickup {
   phase: number;
 }
 
+interface Placement {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  scale: number;
+}
+
 const BASE = import.meta.env.BASE_URL;
+const WALL_POLYGON_SIDES = 24;
+const WALL_SEGMENTS_PER_EDGE = 3;
+
+function neutralize(material: Material): void {
+  const std = material as MeshStandardMaterial;
+  if ('metalness' in std) std.metalness = 0;
+  if ('roughness' in std) std.roughness = Math.max(0.75, std.roughness);
+  if ('emissive' in std) {
+    std.emissive.set(0x000000);
+    std.emissiveIntensity = 0;
+  }
+}
+
+function neutralizeTree(object: Object3D): void {
+  object.traverse((node) => {
+    const mesh = node as Mesh;
+    if (!mesh.isMesh) return;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const material of materials) neutralize(material);
+  });
+}
 
 export class Arena {
   public readonly scene = new Scene();
@@ -55,15 +84,17 @@ export class Arena {
   public readonly landmarks = new Group();
   public readonly arenaFloorY = 0;
   public readonly rng: RNG;
+  public readonly mapSource =
+    'Kenney Building Kit (CC0 1.0) + OpenGameArt 3D Interior Home Assets (CC0 1.0)';
   public variant: ArenaVariant;
   private elapsed = 0;
-  private floorMaterial!: MeshStandardMaterial;
+  private readonly keyLight = new DirectionalLight(0xfff1dc, 2.0);
 
   public constructor(seed: number | string) {
     this.rng = new RNG(seed);
-    this.variant = this.rng.int(0, 2) === 0 ? 'Moss Hollow' : 'Amber Grove';
-    this.scene.background = new Color(0x0c1410);
-    this.scene.fog = new FogExp2(0x0c1410, 0.018);
+    this.variant = this.rng.int(0, 2) === 0 ? 'Bench Lab' : 'Night Lab';
+    this.scene.background = new Color(0x1b1f24);
+    this.scene.fog = new FogExp2(0x1b1f24, 0.006);
     this.scene.add(this.landmarks);
     this.loadEnvironmentMap();
     this.createLighting();
@@ -71,8 +102,10 @@ export class Arena {
     this.createArenaBoundary();
     this.createObstacles();
     this.createFoodPickups();
+    this.applyVariant();
   }
 
+  /** HDRI is used for image-based lighting only; the background stays a flat neutral. */
   private loadEnvironmentMap(): void {
     if (typeof document === 'undefined') return;
     new RGBELoader().load(
@@ -81,9 +114,6 @@ export class Arena {
         texture.mapping = EquirectangularReflectionMapping;
         this.scene.environment = texture;
         this.scene.environmentIntensity = 0.55;
-        this.scene.background = texture;
-        this.scene.backgroundBlurriness = 0.6;
-        this.scene.backgroundIntensity = 0.35;
       },
       undefined,
       (error) => console.warn('[arena] HDRI environment failed to load', error),
@@ -91,323 +121,374 @@ export class Arena {
   }
 
   private createLighting(): void {
-    // IBL supplies the fill; hemisphere is a gentle top-down tint only.
-    this.scene.add(new HemisphereLight(0x9fb7c8, 0x3a3d2c, 0.9));
-    const sun = new DirectionalLight(0xfff1dc, 2.2);
-    sun.position.set(10, 18, 6);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.bias = -0.0005;
-    sun.shadow.normalBias = 0.02;
-    sun.shadow.camera.left = -22;
-    sun.shadow.camera.right = 22;
-    sun.shadow.camera.top = 22;
-    sun.shadow.camera.bottom = -22;
-    this.scene.add(sun);
+    this.scene.add(new HemisphereLight(0x9fb7c8, 0x3a3d2c, 0.7));
+    this.keyLight.position.set(8, 20, 6);
+    this.keyLight.castShadow = true;
+    this.keyLight.shadow.mapSize.set(2048, 2048);
+    this.keyLight.shadow.bias = -0.0005;
+    this.keyLight.shadow.normalBias = 0.02;
+    this.keyLight.shadow.camera.left = -22;
+    this.keyLight.shadow.camera.right = 22;
+    this.keyLight.shadow.camera.top = 22;
+    this.keyLight.shadow.camera.bottom = -22;
+    this.scene.add(this.keyLight);
     const fill = new DirectionalLight(0x6f86a8, 0.5);
     fill.position.set(-12, 8, -8);
     this.scene.add(fill);
   }
 
   /**
-   * Asynchronously assign a diff/nor/rough texture set onto a material.
-   * If a texture fails, the diffuse slot swaps in the procedural fallback.
+   * Build one InstancedMesh per mesh in the loaded template so the whole
+   * kit piece (frame + glazing, multi-part details) renders per instance.
+   * Falls back to a single neutral InstancedMesh when the asset is missing.
    */
-  private applyTextures(
-    material: MeshStandardMaterial,
+  private instancedFromTemplate(
     name: string,
-    repeat: number,
-    fallback: () => Texture,
-  ): void {
-    if (typeof document === 'undefined') {
-      material.map = fallback();
-      return;
+    assetName: ModelAssetName,
+    placements: readonly Placement[],
+    fallbackGeometry: BufferGeometry,
+    fallbackMaterial: Material,
+  ): Group {
+    const group = new Group();
+    const template = getTemplate(assetName);
+    const meshes: Mesh[] = [];
+    if (template) {
+      template.scene.updateMatrixWorld(true);
+      neutralizeTree(template.scene);
+      template.scene.traverse((node) => {
+        if ((node as Mesh).isMesh) meshes.push(node as Mesh);
+      });
     }
-    const loader = new TextureLoader();
-    const assign = (
-      suffix: string,
-      slot: 'map' | 'normalMap' | 'roughnessMap',
-      srgb: boolean,
-    ): void => {
-      loader.load(
-        `${BASE}textures/${name}_${suffix}_1k.jpg`,
-        (texture) => {
-          texture.wrapS = RepeatWrapping;
-          texture.wrapT = RepeatWrapping;
-          texture.repeat.set(repeat, repeat);
-          if (srgb) texture.colorSpace = SRGBColorSpace;
-          material[slot] = texture;
-          material.needsUpdate = true;
-        },
-        undefined,
-        () => {
-          if (slot === 'map') {
-            material.map = fallback();
-            material.needsUpdate = true;
-          }
-        },
-      );
-    };
-    assign('diff', 'map', true);
-    assign('nor_gl', 'normalMap', false);
-    assign('rough', 'roughnessMap', false);
+    const dummy = new Object3D();
+    if (meshes.length === 0) {
+      const instanced = new InstancedMesh(fallbackGeometry, fallbackMaterial, placements.length);
+      instanced.name = name;
+      instanced.castShadow = true;
+      instanced.receiveShadow = true;
+      placements.forEach((placement, index) => {
+        dummy.position.set(placement.x, placement.y, placement.z);
+        dummy.rotation.set(0, placement.yaw, 0);
+        dummy.scale.setScalar(placement.scale);
+        dummy.updateMatrix();
+        instanced.setMatrixAt(index, dummy.matrix);
+      });
+      group.add(instanced);
+      return group;
+    }
+    for (const mesh of meshes) {
+      const instanced = new InstancedMesh(mesh.geometry, mesh.material, placements.length);
+      instanced.name = name;
+      instanced.castShadow = true;
+      instanced.receiveShadow = true;
+      const local = mesh.matrixWorld.clone();
+      placements.forEach((placement, index) => {
+        dummy.position.set(placement.x, placement.y, placement.z);
+        dummy.rotation.set(0, placement.yaw, 0);
+        dummy.scale.setScalar(placement.scale);
+        dummy.updateMatrix();
+        instanced.setMatrixAt(index, dummy.matrix.clone().multiply(local));
+      });
+      group.add(instanced);
+    }
+    return group;
+  }
+
+  private cloneAt(
+    assetName: ModelAssetName,
+    x: number,
+    y: number,
+    z: number,
+    yaw: number,
+    scale: number,
+    fallback: () => Mesh,
+  ): Object3D {
+    const template = getTemplate(assetName);
+    if (!template) {
+      const mesh = fallback();
+      mesh.position.set(x, y, z);
+      mesh.rotation.y = yaw;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      return mesh;
+    }
+    const clone = template.scene.clone(true);
+    neutralizeTree(clone);
+    clone.position.set(x, y, z);
+    clone.rotation.y = yaw;
+    clone.scale.setScalar(scale);
+    return clone;
   }
 
   private createFloor(): void {
-    this.floorMaterial = new MeshStandardMaterial({
-      color: 0x8a9070,
-      roughness: 0.95,
-      metalness: 0,
-    });
-    this.applyTextures(this.floorMaterial, 'forest_floor', 7, () => createMossFloorTexture());
-    const floor = new Mesh(
-      new CylinderGeometry(this.radius, this.radius, 0.15, 64),
-      this.floorMaterial,
+    const placements: Placement[] = [];
+    for (let gx = -20; gx < 20; gx += 2) {
+      for (let gz = -20; gz < 20; gz += 2) {
+        placements.push({ x: gx + 1, y: -0.1, z: gz + 1, yaw: 0, scale: 1 });
+      }
+    }
+    const floor = this.instancedFromTemplate(
+      'arena-floor',
+      'kit-floor',
+      placements,
+      new BoxGeometry(2, 0.1, 2),
+      new MeshStandardMaterial({ color: 0x8e8f99, roughness: 0.95, metalness: 0, emissiveIntensity: 0 }),
     );
-    floor.position.y = -0.12;
-    floor.receiveShadow = true;
     this.scene.add(floor);
-    this.createTerrainProps();
   }
 
   private createArenaBoundary(): void {
-    const stoneMaterial = new MeshStandardMaterial({
-      color: 0x9aa094,
-      roughness: 0.9,
-      metalness: 0,
-    });
-    this.applyTextures(stoneMaterial, 'mossy_stone_wall', 6, () => createStoneTexture());
-    const wall = new Mesh(
-      new CylinderGeometry(this.radius + 0.35, this.radius + 0.35, 1.6, 64, 1, true),
-      stoneMaterial,
-    );
-    wall.position.y = 0.8;
-    wall.receiveShadow = true;
-    this.scene.add(wall);
-    for (let index = 0; index < 12; index += 1) {
-      const angle = (index / 12) * Math.PI * 2;
-      const post = new Mesh(
-        new CylinderGeometry(0.22, 0.3, 1.9 + (index % 3) * 0.35, 8),
-        stoneMaterial,
-      );
-      post.position.set(
-        Math.cos(angle) * (this.radius + 0.35),
-        0.9 + (index % 3) * 0.17,
-        Math.sin(angle) * (this.radius + 0.35),
-      );
-      post.castShadow = true;
-      post.receiveShadow = true;
-      this.scene.add(post);
-    }
-    // Decorative boulders scattered outside the play radius.
-    const rockTemplate = getTemplate('rock-large');
-    for (let index = 0; index < 6; index += 1) {
-      const angle = (index / 6) * Math.PI * 2 + 0.35;
-      const distance = this.radius + 2.2 + (index % 3) * 1.4;
-      let rock: Mesh | Group;
-      if (rockTemplate) {
-        rock = rockTemplate.scene.clone();
-        rock.traverse((node) => {
-          const mesh = node as Mesh;
-          if (mesh.isMesh) {
-            mesh.castShadow = true;
-            mesh.receiveShadow = true;
-            const material = mesh.material as MeshStandardMaterial;
-            if ('metalness' in material) material.metalness = 0;
-            if ('roughness' in material) material.roughness = Math.max(0.7, material.roughness);
-          }
-        });
-        rock.scale.setScalar(0.02 * (1 + (index % 3) * 0.4));
-      } else {
-        rock = new Mesh(new SphereGeometry(0.9 + (index % 3) * 0.4, 9, 7), stoneMaterial);
-        (rock as Mesh).castShadow = true;
-        (rock as Mesh).receiveShadow = true;
+    const boundaryRadius = this.radius + 0.6;
+    const wallPlacements: Placement[] = [];
+    const windowPlacements: Placement[] = [];
+    const columnPlacements: Placement[] = [];
+    let pieceIndex = 0;
+    for (let side = 0; side < WALL_POLYGON_SIDES; side += 1) {
+      const a0 = (side / WALL_POLYGON_SIDES) * Math.PI * 2;
+      const a1 = ((side + 1) / WALL_POLYGON_SIDES) * Math.PI * 2;
+      const v0 = { x: Math.cos(a0) * boundaryRadius, z: Math.sin(a0) * boundaryRadius };
+      const v1 = { x: Math.cos(a1) * boundaryRadius, z: Math.sin(a1) * boundaryRadius };
+      columnPlacements.push({ x: v0.x, y: 0, z: v0.z, yaw: a0, scale: 1 });
+      for (let piece = 0; piece < WALL_SEGMENTS_PER_EDGE; piece += 1) {
+        const t = (piece + 0.5) / WALL_SEGMENTS_PER_EDGE;
+        const x = v0.x + (v1.x - v0.x) * t;
+        const z = v0.z + (v1.z - v0.z) * t;
+        // Kit walls run along local +z; yaw aligns +z with the edge tangent.
+        const yaw = Math.atan2(v1.x - v0.x, v1.z - v0.z);
+        const placement = { x, y: 0, z, yaw, scale: 1 };
+        if (pieceIndex % 3 === 0) windowPlacements.push(placement);
+        else wallPlacements.push(placement);
+        pieceIndex += 1;
       }
-      rock.position.set(Math.cos(angle) * distance, 0.1, Math.sin(angle) * distance);
-      rock.rotation.y = this.rng.range(0, Math.PI * 2);
-      this.scene.add(rock);
     }
-  }
-
-  private createTerrainProps(): void {
-    const platformMaterial = new MeshStandardMaterial({
-      color: 0x66705c,
-      roughness: 0.95,
-      metalness: 0,
-    });
-    this.applyTextures(platformMaterial, 'mossy_stone_wall', 2, () => createStoneTexture());
-    const reedMaterial = new MeshStandardMaterial({
-      color: 0x8a7a4c,
-      roughness: 0.9,
-      metalness: 0,
-    });
-    this.applyTextures(reedMaterial, 'bark_brown_02', 1, () => createBarkTexture());
-    const count = this.variant === 'Moss Hollow' ? 5 : 8;
-    for (let index = 0; index < count; index += 1) {
-      const angle = (index / count) * Math.PI * 2 + 0.2;
-      const distance = 5.5 + (index % 3) * 2;
-      // Flat lichen-covered stone platform.
-      const platform = new Mesh(
-        new CylinderGeometry(1.35, 1.45, 0.3, 10),
-        platformMaterial,
-      );
-      platform.position.set(Math.cos(angle) * distance, 0.25 + (index % 2) * 0.18, Math.sin(angle) * distance);
-      platform.castShadow = true;
-      platform.receiveShadow = true;
-      this.landmarks.add(platform);
-      this.obstacles.push({
-        id: `platform-${index}`,
-        object: platform,
-        x: platform.position.x,
-        z: platform.position.z,
-        radius: 1.3,
-        height: platform.position.y + 0.15,
-        kind: 'pillar',
-      });
-      // Dry reed post.
-      const post = new Mesh(
-        new CylinderGeometry(0.05, 0.1, 2.8, 7),
-        reedMaterial,
-      );
-      post.position.set(platform.position.x + 0.8, 1.4, platform.position.z);
-      post.castShadow = true;
-      this.landmarks.add(post);
-    }
-    // Hanging seed pods where the holo signs used to be.
-    for (let index = 0; index < 4; index += 1) {
-      const pod = new Mesh(
-        new SphereGeometry(0.32, 10, 8),
-        new MeshStandardMaterial({ color: 0x7a6438, roughness: 0.85 }),
-      );
-      pod.scale.set(1, 1.5, 1);
-      pod.position.set(-9 + index * 6, 3.2, index % 2 === 0 ? -7 : 7);
-      const stem = new Mesh(
-        new CylinderGeometry(0.02, 0.03, 1.2, 5),
-        reedMaterial,
-      );
-      stem.position.copy(pod.position);
-      stem.position.y += 0.9;
-      this.landmarks.add(pod, stem);
-    }
+    this.scene.add(
+      this.instancedFromTemplate(
+        'arena-wall',
+        'kit-wall',
+        wallPlacements,
+        new BoxGeometry(2, 2.4, 0.15),
+        new MeshStandardMaterial({ color: 0x8e8f99, roughness: 0.9, metalness: 0, emissiveIntensity: 0 }),
+      ),
+      this.instancedFromTemplate(
+        'arena-wall-window',
+        'kit-wall-window',
+        windowPlacements,
+        new BoxGeometry(2, 2.4, 0.15),
+        new MeshStandardMaterial({ color: 0x7d8a99, roughness: 0.85, metalness: 0, emissiveIntensity: 0 }),
+      ),
+      this.instancedFromTemplate(
+        'arena-column',
+        'kit-column',
+        columnPlacements,
+        new CylinderGeometry(0.28, 0.32, 2.4, 8),
+        new MeshStandardMaterial({ color: 0x9a9d94, roughness: 0.9, metalness: 0, emissiveIntensity: 0 }),
+      ),
+    );
   }
 
   private createObstacles(): void {
     const obstacleRng = this.rng.fork(0xabc123);
-    const stoneMaterial = new MeshStandardMaterial({
-      color: 0x8b8f85,
-      roughness: 0.9,
-      metalness: 0,
-    });
-    this.applyTextures(stoneMaterial, 'mossy_stone_wall', 1, () => createStoneTexture());
-    const mushroomCap = new MeshStandardMaterial({ color: 0x9a7b5a, roughness: 0.8 });
-    const mushroomStem = new MeshStandardMaterial({ color: 0xd8cbb2, roughness: 0.85 });
-    const rockTemplate = getTemplate('rock');
-    for (let index = 0; index < 14; index += 1) {
-      const angle = obstacleRng.range(-Math.PI, Math.PI);
-      const distance = obstacleRng.range(4.5, this.radius - 2.8);
-      const radius = obstacleRng.range(0.35, 0.8);
-      const height = obstacleRng.range(1.2, 3.4);
-      const kind = index % 4 === 0 ? 'crystal' : 'pillar';
-      let object: Object3D;
-      if (kind === 'pillar') {
-        if (rockTemplate) {
-          const rock = rockTemplate.scene.clone(true);
-          rock.traverse((node) => {
-            const mesh = node as Mesh;
-            if (mesh.isMesh) {
-              mesh.castShadow = true;
-              mesh.receiveShadow = true;
-              const material = mesh.material as MeshStandardMaterial;
-              if ('metalness' in material) material.metalness = 0;
-              if ('roughness' in material) material.roughness = Math.max(0.7, material.roughness);
-            }
-          });
-          rock.scale.set(radius * 0.04, height * 0.02, radius * 0.04);
-          rock.rotation.y = obstacleRng.range(0, Math.PI * 2);
-          const holder = new Group();
-          holder.add(rock);
-          object = holder;
-        } else {
-          object = new Mesh(
-            new CylinderGeometry(radius * (0.7 + obstacleRng.next() * 0.3), radius, height, 9),
-            stoneMaterial,
-          );
-        }
-        object.castShadow = true;
-        object.receiveShadow = true;
-      } else {
-        // Mushroom: cream stem + muted tan cap hemisphere.
-        object = new Mesh(new SphereGeometry(radius, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), mushroomCap);
-        const stem = new Mesh(new CylinderGeometry(radius * 0.3, radius * 0.4, height * 0.6, 7), mushroomStem);
-        stem.position.y = -height * 0.25;
-        object.add(stem);
-        object.scale.y = height / (radius * 2) * 0.5;
-        object.castShadow = true;
-      }
-      object.position.set(Math.cos(angle) * distance, height / 2, Math.sin(angle) * distance);
-      object.rotation.x = obstacleRng.range(0, 0.15);
-      object.rotation.z = obstacleRng.range(0, 0.15);
-      this.landmarks.add(object);
+    const fallbackWallMat = new MeshStandardMaterial({ color: 0x8e8f99, roughness: 0.9, metalness: 0, emissiveIntensity: 0 });
+    const benchMat = new MeshStandardMaterial({ color: 0x7a6a55, roughness: 0.85, metalness: 0, emissiveIntensity: 0 });
+    const maxR = this.radius - 1.5;
+
+    // (i) Column ring.
+    const columnPlacements: Placement[] = [];
+    for (let index = 0; index < 6; index += 1) {
+      const angle = (index / 6) * Math.PI * 2 + obstacleRng.range(-0.15, 0.15);
+      const distance = 7 + obstacleRng.range(-0.4, 0.4);
+      const x = Math.cos(angle) * distance;
+      const z = Math.sin(angle) * distance;
+      columnPlacements.push({ x, y: 0, z, yaw: angle, scale: 1 });
       this.obstacles.push({
-        id: `obstacle-${index}`,
-        object,
-        x: object.position.x,
-        z: object.position.z,
-        radius,
-        height,
-        kind,
+        id: `column-${index}`,
+        object: this.landmarks,
+        x,
+        z,
+        radius: 0.45,
+        height: 2.4,
+        kind: 'pillar',
       });
     }
+    this.landmarks.add(
+      this.instancedFromTemplate(
+        'lab-column',
+        'kit-column',
+        columnPlacements,
+        new CylinderGeometry(0.4, 0.45, 2.4, 8),
+        fallbackWallMat,
+      ),
+    );
+
+    // (ii) Straight partitions: 3 low-wall pieces in a radial line, 3 circles each.
+    for (let index = 0; index < 3; index += 1) {
+      const angle = (index / 3) * Math.PI * 2 + obstacleRng.range(0.2, 0.9);
+      const distance = 11.5 + obstacleRng.range(-0.5, 0.5);
+      const cx = Math.cos(angle) * distance;
+      const cz = Math.sin(angle) * distance;
+      // Partition runs radially: kit walls are 2 long along local +z, and
+      // yaw maps +z to (sin yaw, cos yaw), so yaw = PI/2 - angle aligns +z
+      // with the radial direction (cos angle, sin angle).
+      const yaw = Math.PI / 2 - angle;
+      const placements: Placement[] = [];
+      for (let piece = 0; piece < 3; piece += 1) {
+        const offset = (piece - 1) * 2;
+        const px = cx + Math.cos(angle) * offset;
+        const pz = cz + Math.sin(angle) * offset;
+        placements.push({ x: px, y: 0, z: pz, yaw, scale: 1 });
+        this.obstacles.push({
+          id: `partition-${index}-${piece}`,
+          object: this.landmarks,
+          x: px,
+          z: pz,
+          radius: 0.7,
+          height: 1.2,
+          kind: 'pillar',
+        });
+      }
+      this.landmarks.add(
+        this.instancedFromTemplate(
+          `lab-partition-${index}`,
+          'kit-partition',
+          placements,
+          new BoxGeometry(2, 1.2, 0.15),
+          fallbackWallMat,
+        ),
+      );
+    }
+
+    // (iii) Lab benches (OGA tables), long side ≈ 3 units, 2 collision circles each.
+    for (let index = 0; index < 4; index += 1) {
+      const angle = obstacleRng.range(-Math.PI, Math.PI);
+      const distance = obstacleRng.range(4, 15);
+      const x = Math.cos(angle) * Math.min(distance, maxR);
+      const z = Math.sin(angle) * Math.min(distance, maxR);
+      const yaw = obstacleRng.range(0, Math.PI * 2);
+      const table = this.cloneAt('lab-table', x, 0, z, yaw, 3 / 1.843, () =>
+        new Mesh(new BoxGeometry(3, 1.1, 1.5), benchMat),
+      );
+      // The OGA table's long axis is local +x, which yaw maps to
+      // (cos yaw, -sin yaw) in world space.
+      const dx = Math.cos(yaw);
+      const dz = -Math.sin(yaw);
+      this.landmarks.add(table);
+      for (const offset of [-1.0, 1.0]) {
+        this.obstacles.push({
+          id: `bench-${index}-${offset < 0 ? 'a' : 'b'}`,
+          object: table,
+          x: x + dx * offset,
+          z: z + dz * offset,
+          radius: 0.9,
+          height: 1.1,
+          kind: 'pillar',
+        });
+      }
+    }
+
+    // (iv) Bookcases against the wall interior.
+    for (let index = 0; index < 2; index += 1) {
+      const angle = obstacleRng.range(-Math.PI, Math.PI);
+      const distance = 16.5;
+      const x = Math.cos(angle) * distance;
+      const z = Math.sin(angle) * distance;
+      const yaw = Math.atan2(-x, -z) + Math.PI / 2; // face inward
+      const bookcase = this.cloneAt('lab-bookcase', x, 0, z, yaw, 1.6, () =>
+        new Mesh(new BoxGeometry(1.1, 2.4, 0.8), benchMat),
+      );
+      this.landmarks.add(bookcase);
+      this.obstacles.push({
+        id: `bookcase-${index}`,
+        object: bookcase,
+        x,
+        z,
+        radius: 0.9,
+        height: 2.4,
+        kind: 'pillar',
+      });
+    }
+
+    // (v) Decorative shelves + pipes along wall segments (no collision).
+    for (let index = 0; index < 2; index += 1) {
+      const angle = (index / 2) * Math.PI * 2 + 0.5;
+      const x = Math.cos(angle) * (this.radius - 0.6);
+      const z = Math.sin(angle) * (this.radius - 0.6);
+      const shelf = this.cloneAt('lab-shelf', x, 1.3, z, Math.atan2(-x, -z) + Math.PI / 2, 1.2, () =>
+        new Mesh(new BoxGeometry(1.4, 0.08, 0.4), benchMat),
+      );
+      this.landmarks.add(shelf);
+    }
+    const pipePlacements: Placement[] = [];
+    for (let index = 0; index < 8; index += 1) {
+      const angle = (index / 8) * Math.PI * 2 + 0.25;
+      pipePlacements.push({
+        x: Math.cos(angle) * (this.radius + 0.1),
+        y: 2.6,
+        z: Math.sin(angle) * (this.radius + 0.1),
+        yaw: angle,
+        scale: 1.6,
+      });
+    }
+    this.landmarks.add(
+      this.instancedFromTemplate(
+        'lab-pipe',
+        'kit-pipe',
+        pipePlacements,
+        new CylinderGeometry(0.08, 0.08, 2.2, 6),
+        fallbackWallMat,
+      ),
+    );
   }
 
   private createFoodPickups(): void {
     const foodRng = this.rng.fork(0xfeed123);
-    const bushTemplate = getTemplate('flower-bushes');
+    const dishMaterial = new MeshPhysicalMaterial({
+      color: 0xdfe6ea,
+      transmission: 0.35,
+      roughness: 0.15,
+      metalness: 0,
+      emissiveIntensity: 0,
+    });
+    const dropletMaterial = new MeshPhysicalMaterial({
+      color: 0xd9a441,
+      roughness: 0.2,
+      metalness: 0,
+      emissive: 0x8a5a10,
+      emissiveIntensity: 0.2,
+    });
     for (let index = 0; index < 8; index += 1) {
-      const angle = foodRng.range(-Math.PI, Math.PI);
-      const distance = foodRng.range(3, this.radius - 2);
-      const object = new Group();
-      // Nectar drop.
-      const core = new Mesh(
-        new SphereGeometry(0.22, 12, 10),
-        new MeshPhysicalMaterial({
-          color: 0xe0a640,
-          transmission: 0.5,
-          roughness: 0.2,
-          metalness: 0,
-          emissive: 0x8a5a10,
-          emissiveIntensity: 0.35,
-        }),
-      );
-      const ring = new Mesh(
-        new TorusGeometry(0.38, 0.02, 6, 24),
-        new MeshStandardMaterial({ color: 0xd9a441, transparent: true, opacity: 0.35, roughness: 0.7 }),
-      );
-      ring.rotation.x = Math.PI / 2;
-      object.add(core, ring);
-      // Flower-bush decoration the drop hovers over.
-      if (bushTemplate) {
-        const bush = bushTemplate.scene.clone(true);
-        bush.traverse((node) => {
-          const mesh = node as Mesh;
-          if (mesh.isMesh) {
-            mesh.castShadow = true;
-            const material = mesh.material as MeshStandardMaterial;
-            if ('metalness' in material) material.metalness = 0;
-            if ('roughness' in material) material.roughness = Math.max(0.7, material.roughness);
-          }
-        });
-        bush.scale.setScalar(0.01);
-        bush.position.y = -0.9;
-        object.add(bush);
+      let x = 0;
+      let z = 0;
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        const angle = foodRng.range(-Math.PI, Math.PI);
+        const distance = foodRng.range(3, this.radius - 2);
+        const cx = Math.cos(angle) * distance;
+        const cz = Math.sin(angle) * distance;
+        const overlaps = this.obstacles.some(
+          (obstacle) =>
+            Math.hypot(cx - obstacle.x, cz - obstacle.z) < obstacle.radius + 1.6,
+        );
+        if (!overlaps) {
+          x = cx;
+          z = cz;
+          break;
+        }
+        x = cx;
+        z = cz;
       }
-      object.position.set(Math.cos(angle) * distance, 0.9, Math.sin(angle) * distance);
+      const object = new Group();
+      const dish = new Mesh(new CylinderGeometry(0.55, 0.55, 0.08, 24), dishMaterial);
+      dish.position.y = 0.04;
+      dish.receiveShadow = true;
+      const droplet = new Mesh(new SphereGeometry(0.18, 12, 10), dropletMaterial);
+      droplet.name = 'droplet';
+      droplet.position.y = 0.2;
+      object.add(dish, droplet);
+      object.position.set(x, 0.01, z);
       this.landmarks.add(object);
       this.foods.push({
         id: `food-${index}`,
         object,
-        x: object.position.x,
-        z: object.position.z,
+        x,
+        z,
         radius: 0.65,
         active: true,
         phase: foodRng.range(0, Math.PI * 2),
@@ -418,23 +499,25 @@ export class Arena {
   public update(dt: number): void {
     this.elapsed += dt;
     for (const food of this.foods) {
-      if (!food.active) {
-        continue;
+      if (!food.active) continue;
+      const droplet = food.object.getObjectByName('droplet');
+      if (droplet) {
+        droplet.position.y = 0.2 + Math.sin(this.elapsed * 2.2 + food.phase) * 0.05;
       }
-      food.object.position.y = 0.9 + Math.sin(this.elapsed * 3 + food.phase) * 0.18;
-      food.object.rotation.y = this.elapsed * 1.8 + food.phase;
-      food.object.scale.setScalar(0.9 + Math.sin(this.elapsed * 4 + food.phase) * 0.12);
     }
   }
 
+  private applyVariant(): void {
+    const night = this.variant === 'Night Lab';
+    this.scene.background = new Color(night ? 0x11141a : 0x1b1f24);
+    this.scene.fog = new FogExp2(night ? 0x11141a : 0x1b1f24, 0.006);
+    this.keyLight.color.set(night ? 0xc9d6ff : 0xfff1dc);
+    this.keyLight.intensity = night ? 1.1 : 2.0;
+  }
+
   public cycleVariant(): ArenaVariant {
-    this.variant = this.variant === 'Moss Hollow' ? 'Amber Grove' : 'Moss Hollow';
-    const tint = this.variant === 'Moss Hollow' ? 0x0c1410 : 0x141008;
-    this.scene.fog = new FogExp2(tint, 0.018);
-    if (this.scene.background instanceof Color) {
-      this.scene.background = new Color(tint);
-    }
-    this.floorMaterial.color.set(this.variant === 'Moss Hollow' ? 0x8a9070 : 0x9a8a62);
+    this.variant = this.variant === 'Bench Lab' ? 'Night Lab' : 'Bench Lab';
+    this.applyVariant();
     return this.variant;
   }
 

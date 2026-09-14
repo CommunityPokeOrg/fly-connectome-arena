@@ -35,7 +35,6 @@ export interface GameSnapshot {
 export class Game {
   public state: GameState = 'title';
   public paused = false;
-  public manualOverride = false;
   public simulationSpeed = 1;
   public score = 0;
   public survival = 0;
@@ -53,7 +52,6 @@ export class Game {
   private waveKills = 0;
   private fireCooldown = 0;
   private waveDelay = 0;
-  private readonly keys = new Set<string>();
 
   public constructor(
     public readonly arena: Arena,
@@ -83,12 +81,8 @@ export class Game {
       return;
     }
     window.addEventListener('keydown', (event) => {
-      this.keys.add(event.key.toLowerCase());
       if (event.key.toLowerCase() === 'p') {
         this.togglePause();
-      }
-      if (event.key.toLowerCase() === 't') {
-        this.manualOverride = !this.manualOverride;
       }
       if (event.key === '[') {
         this.simulationSpeed = clamp(this.simulationSpeed - 0.5, 0.5, 4);
@@ -97,7 +91,6 @@ export class Game {
         this.simulationSpeed = clamp(this.simulationSpeed + 0.5, 0.5, 4);
       }
     });
-    window.addEventListener('keyup', (event) => this.keys.delete(event.key.toLowerCase()));
   }
 
   public start(): void {
@@ -175,15 +168,11 @@ export class Game {
       { heading: this.fly.heading, steps: 16 },
       dt,
     );
-    const manualTurn = this.readManualTurn();
-    const manualThrust = this.readManualThrust();
     const flyResult = this.fly.update(
       dt,
       command,
       this.arena.radius,
       this.arena.obstacles,
-      this.manualOverride ? manualTurn : 0,
-      this.manualOverride ? manualThrust : undefined,
     );
     if (flyResult.damage > 0 && (flyResult.wallHit || flyResult.obstacleHit)) {
       this.damage(flyResult.damage * dt * 3, 'collision');
@@ -203,21 +192,6 @@ export class Game {
     if (this.debugWin && this.survival > 1 && this.wave === 1) {
       this.beginVictory();
     }
-  }
-
-  private readManualTurn(): number {
-    return Number(this.keys.has('arrowright') || this.keys.has('d')) -
-      Number(this.keys.has('arrowleft') || this.keys.has('a'));
-  }
-
-  private readManualThrust(): number {
-    return clamp(
-      0.55 +
-      Number(this.keys.has('arrowup') || this.keys.has('w')) * 0.35 -
-      Number(this.keys.has('arrowdown') || this.keys.has('s')) * 0.3,
-      0,
-      1,
-    );
   }
 
   private handleFiring(command: MotorCommand): void {

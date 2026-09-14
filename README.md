@@ -1,10 +1,11 @@
 # FLY // CONNECTOME ARENA
 
 Fly Connectome Arena is a self-contained retro-sci-fi browser game. A
-simulated *Drosophila* navigates a circular neon arena, collects restorative
-food, avoids laser and electric hazards, and fires at chasing wasps and
-patrolling drones. Its actions come from a deterministic,
-connectome-inspired spiking neural network rather than a direct
+simulated *Drosophila* navigates a walled flight-arena chamber, collects
+restorative sucrose droplets, avoids hazards, and fires at chasing wasps and
+patrolling drones. The simulation is fully autonomous: steering, foraging,
+and evasion all come from a deterministic, connectome-inspired spiking
+neural network plus a small reflex layer rather than a direct
 sensor-to-command script.
 
 There is no backend, CDN, remote asset, or external service. Three.js draws
@@ -22,15 +23,17 @@ bursts.
 
 ## Environments
 
-Real CC0 texture sets (forest floor, mossy stone, bark) are loaded from
-`public/textures/`, with procedural CanvasTexture fallbacks generated at
-startup, and a CC0 HDRI greenhouse provides soft image-based lighting. The
-seeded map is either **Moss Hollow** or **Amber Grove**. The HUD
-MAP button cycles the active environment palette. Lichen-covered stone
-platforms, dry reed posts, hanging seed pods, boulders, mushrooms, and a
-weathered stone boundary wall are generated with collision bounds from the
-same placement data used for their geometry. Lighting combines a hemisphere
-fill, a shadow-casting directional key light, and GTAO post-processing.
+The arena is built from real CC0 glTF models: floor tiles, walls, windowed
+segments, columns, low partitions, and pipes from the Kenney Building Kit,
+plus lab tables, bookcases, and shelves from the OpenGameArt 3D Interior Home
+Assets pack (see `ASSETS.md`). Wall segments and floor tiles are drawn with
+`InstancedMesh`, and a CC0 HDRI provides soft image-based lighting over a
+flat neutral background. The seeded map is either **Bench Lab** or
+**Night Lab**. The HUD MAP button cycles the active environment palette.
+Every visible obstacle has matching collision bounds; a small reflex
+steering layer keeps the fly out of walls and partitions it approaches
+head-on. Lighting combines a hemisphere fill, a shadow-casting directional
+key light, and GTAO post-processing.
 
 ## Controls
 
@@ -43,8 +46,6 @@ fill, a shadow-casting directional key light, and GTAO post-processing.
 | M | Mute synthesized WebAudio |
 | `[` / `]` | Change simulation speed from 0.5× to 4× |
 | R | Reset the run |
-| T | Toggle manual override |
-| WASD / arrow keys | Turn and throttle while manual override is enabled |
 | Enter | Skip the victory sequence |
 
 The bottom control bar provides the same common actions with accessible

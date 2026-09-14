@@ -38,6 +38,14 @@ function normalize(v: Vec2): Vec2 {
   return { x: v.x / len, z: v.z / len };
 }
 
+export function add(a: Vec2, b: Vec2): Vec2 {
+  return { x: a.x + b.x, z: a.z + b.z };
+}
+
+export function scale(v: Vec2, factor: number): Vec2 {
+  return { x: v.x * factor, z: v.z * factor };
+}
+
 export function limit(v: Vec2, max: number): Vec2 {
   const len = length(v);
   if (len <= max || len < 1e-6) {
@@ -222,6 +230,18 @@ export function avoidCircles(
   }
   if (force.x === 0 && force.z === 0) {
     return force;
+  }
+  // Head-on symmetry break: an obstacle dead ahead produces a force that is
+  // anti-parallel to the velocity, which brakes instead of steering aside.
+  // When the summed force points nearly straight back, add a strong fixed
+  // tangential term so the agent commits to a deterministic dodge direction.
+  const forward = { x: agent.velocity.x / speed, z: agent.velocity.z / speed };
+  const magnitude = length(force);
+  const headOn = -(force.x * forward.x + force.z * forward.z) / magnitude;
+  if (headOn > 0.8) {
+    const perpendicular = { x: -force.z / magnitude, z: force.x / magnitude };
+    force.x += perpendicular.x * magnitude;
+    force.z += perpendicular.z * magnitude;
   }
   const direction = normalize(force);
   return { x: direction.x * agent.maxForce, z: direction.z * agent.maxForce };

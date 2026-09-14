@@ -10,6 +10,13 @@ import { clampToArena, resolveSphereAgainstCircle } from './collisions.ts';
 import type { MotorCommand } from '../brain/fly-brain.ts';
 import type { ArenaObstacle } from './arena.ts';
 import { animateInsect, createInsectMesh, flashInsect, type InsectRig } from './insects.ts';
+import {
+  add,
+  avoidCircles,
+  containWithinCircle,
+  scale,
+  type SteeringAgent,
+} from './steering.ts';
 
 export interface FlyUpdateResult {
   wallHit: boolean;
@@ -36,6 +43,8 @@ export class Fly {
   private evadeSide = 1;
   private escapeTimer = 0;
   private escapeSide = 1;
+  private reflexTimer = 0;
+  private reflexSide = 1;
   private elapsed = 0;
   private readonly rng: RNG;
 
@@ -53,13 +62,10 @@ export class Fly {
     command: MotorCommand,
     arenaRadius: number,
     obstacles: readonly ArenaObstacle[],
-    manualTurn = 0,
-    manualThrust: number | undefined = undefined,
   ): FlyUpdateResult {
     this.elapsed += dt;
-    const manual = manualTurn !== 0;
-    const requestedTurn = manual ? manualTurn : command.turn;
-    let thrust = manualThrust ?? command.thrust;
+    const requestedTurn = command.turn;
+    let thrust = command.thrust;
 
     if (command.evade && this.evadeTimer <= 0) {
       // Deterministic dodge side: hash the deci-second tick so no Math.random.
@@ -75,30 +81,53 @@ export class Fly {
     this.escapeTimer = Math.max(0, this.escapeTimer - dt);
 
     const turnRate = this.evadeTimer > 0 ? 3.7 : 2.65;
-    // Smooth the neural turn request; manual steering bypasses smoothing and
-    // the circle-breaker entirely.
     this.turnSmoothed += (requestedTurn - this.turnSmoothed) * (1 - Math.exp(-dt * 6));
-    let appliedTurn = manual ? requestedTurn : this.turnSmoothed;
+    let appliedTurn = this.turnSmoothed;
 
     // Saccade-style circle breaker: if the fly has circled almost a full loop
     // within ~1.5 s, dart straight with full thrust for a second.
     this.circleAccumulator = this.circleAccumulator * Math.exp(-dt / 1.5)
       + appliedTurn * turnRate * dt;
-    if (!manual && Math.abs(this.circleAccumulator) > 0.85 * Math.PI * 2) {
+    if (Math.abs(this.circleAccumulator) > 0.55 * Math.PI * 2) {
       this.straightTimer = 1.0;
       this.circleAccumulator = 0;
     }
     this.straightTimer = Math.max(0, this.straightTimer - dt);
-    if (!manual && this.straightTimer > 0) {
+    if (this.straightTimer > 0) {
       appliedTurn *= 0.15;
       thrust = 1.0;
     }
     // Octopamine stress makes steering erratic; escape adds a thrust burst.
-    if (!manual) {
-      appliedTurn += (this.rng.next() * 2 - 1) * command.stress * 0.9;
-    }
+    appliedTurn += (this.rng.next() * 2 - 1) * command.stress * 0.9;
     if (this.escapeTimer > 0) {
       thrust = Math.max(thrust, 1.0);
+    }
+
+    // Reflex steering layer: the connectome command stays primary, but an
+    // obstacle/containment force projected onto the lateral axis nudges the
+    // fly aside from imminent collisions it would otherwise fly into.
+    const agent: SteeringAgent = {
+      position: { x: this.position.x, z: this.position.z },
+      velocity: { x: this.velocity.x, z: this.velocity.z },
+      maxSpeed: 8,
+      maxForce: 12,
+    };
+    const reflex = add(
+      avoidCircles(agent, obstacles, 2.6),
+      scale(containWithinCircle(agent, arenaRadius, 2.5), 1.5),
+    );
+    const lateralReflex = reflex.x * Math.cos(this.heading) - reflex.z * Math.sin(this.heading);
+    appliedTurn += clamp(lateralReflex * 0.12, -0.9, 0.9);
+    // A strong reflex (obstacle nearly head-on) commits to a short dodge so
+    // the turn does not fade the moment the lookahead point slides past the
+    // obstacle's edge.
+    if (Math.abs(lateralReflex) >= 5) {
+      this.reflexSide = Math.sign(lateralReflex);
+      this.reflexTimer = 0.45;
+    }
+    this.reflexTimer = Math.max(0, this.reflexTimer - dt);
+    if (this.reflexTimer > 0) {
+      appliedTurn = this.reflexSide * 0.9 + appliedTurn * 0.25;
     }
 
     this.heading += appliedTurn * turnRate * dt;
@@ -185,6 +214,7 @@ export class Fly {
     this.straightTimer = 0;
     this.evadeTimer = 0;
     this.escapeTimer = 0;
+    this.reflexTimer = 0;
     this.group.visible = true;
   }
 

@@ -93,13 +93,12 @@ export class HUD {
       <div class="title-card">
         <p class="eyebrow">Deterministic spiking-network flight simulation</p>
         <h1>Fly Connectome Arena</h1>
-        <p class="subtitle">A simulated <em>Drosophila</em> forages and evades predators in a night garden, steered by a connectome-inspired leaky integrate-and-fire brain whose synapses adapt through dopamine and octopamine reinforcement.</p>
+        <p class="subtitle">A simulated <em>Drosophila</em> forages and evades predators in a flight-arena chamber, steered by a connectome-inspired leaky integrate-and-fire brain whose synapses adapt through dopamine and octopamine reinforcement.</p>
         <div class="instruction-grid">
           <span><b>Space</b> start / restart</span><span><b>P</b> pause</span>
           <span><b>C</b> camera</span><span><b>V</b> telemetry panel</span>
           <span><b>M</b> mute</span><span><b>[ ]</b> simulation speed</span>
-          <span><b>R</b> reset</span><span><b>T</b> manual override</span>
-          <span><b>WASD / arrows</b> steer manually</span>
+          <span><b>R</b> reset</span>
         </div>
         <button class="primary-button" type="button">Begin simulation</button>
       </div>`;
@@ -156,9 +155,8 @@ export class HUD {
     this.healthFill.style.width = `${health}%`;
     this.healthFill.parentElement?.classList.toggle('low', health < 30);
     this.healthValue.textContent = `${Math.round(health)}%`;
-    const mode = this.game.manualOverride ? 'Manual override' : 'Neural control';
     const state = this.game.state === 'playing'
-      ? `${this.game.paused ? 'Paused' : mode} · ${this.game.simulationSpeed.toFixed(1)}×${this.muted ? ' · muted' : ''}`
+      ? `${this.game.paused ? 'Paused' : 'Autonomous · connectome'} · ${this.game.simulationSpeed.toFixed(1)}×${this.muted ? ' · muted' : ''}`
       : this.game.state.charAt(0).toUpperCase() + this.game.state.slice(1);
     this.status.textContent = state;
     const fpsNode = this.root.querySelector('.fps-value');

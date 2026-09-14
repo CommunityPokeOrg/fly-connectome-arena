@@ -9,7 +9,7 @@ import {
   type Scene,
 } from 'three';
 import { RNG } from '../core/rng.ts';
-import { createBarkTexture } from './textures.ts';
+
 
 export interface Hazard {
   id: string;
@@ -84,7 +84,6 @@ export class Hazards {
       new BoxGeometry(0.7, 2.7, 0.7),
       new MeshStandardMaterial({
         color: 0x241d16,
-        map: typeof document === 'undefined' ? null : createBarkTexture(),
         roughness: 0.95,
       }),
     );
