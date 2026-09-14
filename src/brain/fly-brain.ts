@@ -5,6 +5,7 @@ import {
   type Population,
 } from './connectome.ts';
 import { LIFNetwork } from './lif.ts';
+import { PlasticityEngine } from './plasticity.ts';
 import type { SensorReadings } from '../game/sensors.ts';
 
 export interface MotorCommand {
@@ -12,6 +13,10 @@ export interface MotorCommand {
   thrust: number;
   fire: boolean;
   evade: boolean;
+  /** 0..1 octopamine stress drive for erratic evasion. */
+  stress: number;
+  /** One-shot escape burst when stress crosses the threshold. */
+  escape: boolean;
   leftRate: number;
   rightRate: number;
   forwardRate: number;
@@ -29,6 +34,8 @@ export interface BrainStepOptions {
 export class FlyBrain {
   public readonly connectome: Connectome;
   public readonly network: LIFNetwork;
+  public readonly plasticity: PlasticityEngine;
+  private escapeCooldown = 0;
   public readonly inputCurrents: Float32Array;
   public lastSpikes: number[] = [];
   public command: MotorCommand = FlyBrain.neutralCommand();
@@ -38,6 +45,7 @@ export class FlyBrain {
   public constructor(seed: number | string) {
     this.connectome = buildConnectome(seed);
     this.network = new LIFNetwork(this.connectome);
+    this.plasticity = new PlasticityEngine(this.connectome, this.network);
     this.inputCurrents = new Float32Array(this.connectome.neurons.length);
   }
 
@@ -52,9 +60,19 @@ export class FlyBrain {
     this.injectSensors(readings);
     this.injectHeading(options.heading, options.headingBumpStrength ?? 22);
     this.injectTonicDrive();
+    // Octopamine stress biases the network toward evasive escape.
+    const stress = this.plasticity.stress;
+    this.inputCurrents[this.connectome.dn.evade] =
+      (this.inputCurrents[this.connectome.dn.evade] ?? 0) + stress * 520;
+    this.inputCurrents[this.connectome.dn.forward] =
+      (this.inputCurrents[this.connectome.dn.forward] ?? 0) + stress * 260;
+    this.escapeCooldown = Math.max(0, this.escapeCooldown - dt);
     for (let step = 0; step < steps; step += 1) {
       this.lastSpikes = this.network.step(this.inputCurrents);
+      this.plasticity.accumulate(0.001);
     }
+    this.plasticity.observeOdor(Math.max(0, ...readings.olfactory), dt);
+    this.plasticity.update(dt);
     this.stepCounter += steps;
     this.command = this.decode();
     return this.command;
@@ -118,17 +136,25 @@ export class FlyBrain {
     const brakeRate = this.network.firingRates[this.connectome.dn.brake] ?? 0;
     const fireRate = this.network.firingRates[this.connectome.dn.fire] ?? 0;
     const evadeRate = this.network.firingRates[this.connectome.dn.evade] ?? 0;
-    const turn = clamp((turnRight - turnLeft) / 28, -1, 1);
+    const turn = clamp((turnRight - turnLeft) / 40, -1, 1);
+    const turnWithDeadzone = Math.abs(turn) < 0.06 ? 0 : turn;
     const thrust = clamp(0.3 + (forwardRate - brakeRate) / 45, 0.12, 1);
     const fire = fireRate > 2 && this.fireCooldown <= 0;
     if (fire) {
       this.fireCooldown = 0.2;
     }
+    const stress = this.plasticity.stress;
+    const escape = stress > 0.55 && this.escapeCooldown <= 0;
+    if (escape) {
+      this.escapeCooldown = 0.9;
+    }
     return {
-      turn,
+      turn: turnWithDeadzone,
       thrust,
       fire,
       evade: evadeRate > 8,
+      stress,
+      escape,
       leftRate: turnLeft,
       rightRate: turnRight,
       forwardRate,
@@ -152,6 +178,8 @@ export class FlyBrain {
     this.lastSpikes = [];
     this.command = FlyBrain.neutralCommand();
     this.fireCooldown = 0;
+    this.escapeCooldown = 0;
+    this.plasticity.reset();
     this.stepCounter = 0;
   }
 
@@ -161,6 +189,8 @@ export class FlyBrain {
       thrust: 0.5,
       fire: false,
       evade: false,
+      stress: 0,
+      escape: false,
       leftRate: 0,
       rightRate: 0,
       forwardRate: 0,

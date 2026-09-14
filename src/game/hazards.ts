@@ -1,17 +1,15 @@
 import {
-  AdditiveBlending,
   BoxGeometry,
   Group,
   Mesh,
-  MeshBasicMaterial,
+  MeshStandardMaterial,
   PointLight,
-  SphereGeometry,
   TorusGeometry,
   Vector3,
   type Scene,
 } from 'three';
 import { RNG } from '../core/rng.ts';
-import { createWarningStripeTexture } from './textures.ts';
+import { createBarkTexture } from './textures.ts';
 
 export interface Hazard {
   id: string;
@@ -38,9 +36,9 @@ export class Hazards {
       const group = new Group();
       group.position.set(Math.cos(angle) * distance, 0, Math.sin(angle) * distance);
       if (kind === 'laser') {
-        this.createLaserGate(group, index);
+        this.createLaserGate(group);
       } else {
-        this.createElectricPillar(group, index);
+        this.createElectricPillar(group);
       }
       scene.add(group);
       this.items.push({
@@ -57,48 +55,49 @@ export class Hazards {
     }
   }
 
-  private createLaserGate(group: Group, index: number): void {
-    const frameMaterial = new MeshBasicMaterial({ color: 0x4f3d9e, wireframe: true });
-    const warningTexture = createWarningStripeTexture();
-    const beamMaterial = new MeshBasicMaterial({
-      color: index % 4 === 0 ? 0x37f5ff : 0xff3eae,
-      transparent: true,
-      opacity: 0.9,
-      blending: AdditiveBlending,
-      map: warningTexture,
-    });
-    const frame = new Mesh(new TorusGeometry(1.25, 0.06, 8, 28), frameMaterial);
+  /** Weathered bronze ring with a thin amber ember beam. */
+  private createLaserGate(group: Group): void {
+    const frame = new Mesh(
+      new TorusGeometry(1.25, 0.06, 8, 28),
+      new MeshStandardMaterial({ color: 0x6b4f2a, metalness: 0.6, roughness: 0.5 }),
+    );
     frame.rotation.x = Math.PI / 2;
-    const beam = new Mesh(new BoxGeometry(2.7, 0.08, 0.08), beamMaterial);
+    frame.castShadow = true;
+    const beam = new Mesh(
+      new BoxGeometry(2.7, 0.05, 0.05),
+      new MeshStandardMaterial({
+        color: 0x3a2c14,
+        emissive: 0xd9a441,
+        emissiveIntensity: 1.4,
+      }),
+    );
     beam.position.y = 0.72;
-    const beamGlow = new Mesh(new BoxGeometry(2.9, 0.16, 0.16), beamMaterial.clone());
-    beamGlow.position.y = 0.72;
-    group.add(frame, beam, beamGlow);
-    const light = new PointLight(index % 4 === 0 ? 0x37f5ff : 0xff3eae, 2.4, 5);
+    group.add(frame, beam);
+    const light = new PointLight(0xd9a441, 0.8, 4);
     light.position.y = 0.75;
     group.add(light);
   }
 
-  private createElectricPillar(group: Group, index: number): void {
-    const pillarMaterial = new MeshBasicMaterial({
-      color: index % 3 === 0 ? 0x52f5d0 : 0xff3cbb,
-      wireframe: true,
-    });
-    const pillar = new Mesh(new BoxGeometry(0.7, 2.7, 0.7), pillarMaterial);
+  /** Charred stump with a faint amber coil. */
+  private createElectricPillar(group: Group): void {
+    const pillar = new Mesh(
+      new BoxGeometry(0.7, 2.7, 0.7),
+      new MeshStandardMaterial({
+        color: 0x241d16,
+        map: typeof document === 'undefined' ? null : createBarkTexture(),
+        roughness: 0.95,
+      }),
+    );
     pillar.position.y = 1.35;
+    pillar.castShadow = true;
     const coil = new Mesh(
       new TorusGeometry(0.63, 0.035, 6, 24),
-      new MeshBasicMaterial({ color: 0xfff071, blending: AdditiveBlending }),
+      new MeshStandardMaterial({ color: 0x2a2014, emissive: 0xd9a441, emissiveIntensity: 0.9 }),
     );
     coil.rotation.x = Math.PI / 2;
     coil.position.y = 1;
-    const cap = new Mesh(
-      new SphereGeometry(0.23, 10, 8),
-      new MeshBasicMaterial({ color: 0xfff6a4, blending: AdditiveBlending }),
-    );
-    cap.position.y = 2.8;
-    group.add(pillar, coil, cap);
-    const light = new PointLight(0xff3cbb, 2, 4);
+    group.add(pillar, coil);
+    const light = new PointLight(0xd9a441, 0.7, 4);
     light.position.y = 1.4;
     group.add(light);
   }

@@ -7,8 +7,8 @@ export interface LIFSnapshot {
 }
 
 interface OutgoingSynapse {
+  index: number;
   target: number;
-  weight: number;
   delaySteps: number;
 }
 
@@ -30,6 +30,10 @@ export class LIFNetwork {
   public readonly spikeRingCount: Uint16Array;
   public readonly lastSpikes: number[] = [];
   public readonly spikeFlags: Uint8Array;
+  /** Live synaptic weights, indexed like `connectome.synapses`. */
+  public readonly weights: Float32Array;
+  /** Immutable copy of the initial weights used as the plasticity baseline. */
+  public readonly baselineWeights: Float32Array;
 
   private readonly outgoing: OutgoingSynapse[][];
   private readonly historyCounts: Uint16Array;
@@ -77,13 +81,16 @@ export class LIFNetwork {
     this.spikeFlags = new Uint8Array(count);
     this.decay = Math.exp(-this.dt / 0.018);
     this.outgoing = Array.from({ length: count }, () => []);
-    for (const synapse of connectome.synapses) {
+    this.weights = new Float32Array(connectome.synapses.length);
+    for (const [index, synapse] of connectome.synapses.entries()) {
+      this.weights[index] = synapse.weight;
       this.outgoing[synapse.source]?.push({
+        index,
         target: synapse.target,
-        weight: synapse.weight,
         delaySteps: Math.max(0, Math.round(synapse.delay / this.dt)),
       });
     }
+    this.baselineWeights = Float32Array.from(this.weights);
   }
 
   public step(input: Float32Array): number[] {
@@ -125,7 +132,7 @@ export class LIFNetwork {
     for (const source of this.lastSpikes) {
       for (const synapse of this.outgoing[source] ?? []) {
         this.synapticCurrents[synapse.target] =
-          (this.synapticCurrents[synapse.target] ?? 0) + synapse.weight;
+          (this.synapticCurrents[synapse.target] ?? 0) + (this.weights[synapse.index] ?? 0);
       }
     }
     for (let neuron = 0; neuron < this.voltages.length; neuron += 1) {
@@ -185,6 +192,7 @@ export class LIFNetwork {
     this.lastSpikes.length = 0;
     this.historyCursor = 0;
     this.time = 0;
+    this.weights.set(this.baselineWeights);
   }
 
   public get simulationTime(): number {

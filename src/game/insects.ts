@@ -1,542 +1,547 @@
 import {
+  AnimationMixer,
+  Box3,
+  BoxGeometry,
+  BufferAttribute,
   BufferGeometry,
   CapsuleGeometry,
-  ConeGeometry,
   CylinderGeometry,
   DoubleSide,
   Group,
-  IcosahedronGeometry,
-  LineBasicMaterial,
-  LineSegments,
+  LoopOnce,
   Mesh,
   MeshPhysicalMaterial,
   MeshStandardMaterial,
-  PlaneGeometry,
-  Shape,
-  ShapeGeometry,
   SphereGeometry,
-  TorusGeometry,
-  Float32BufferAttribute,
+  Vector3,
+  type AnimationAction,
+  type Material,
+  type Object3D,
 } from 'three';
+import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { getTemplate, type InsectAssetName } from './insect-assets.ts';
+import { createWingVenationTexture } from './textures.ts';
 
 export type InsectVariant = 'fly' | 'wasp' | 'beetle' | 'drone-hornet';
 
-export interface LegRig {
-  hip: Group;
-  knee: Group;
-  ankle: Group;
-  side: number;
-  index: number;
-}
-
-export interface WingRig {
-  pivot: Group;
-  membrane: Mesh;
-  veins: LineSegments;
-}
-
 export interface InsectRig {
   root: Group;
-  head: Group;
-  thorax: Mesh;
-  abdomen: Mesh;
-  eyes: Mesh[];
-  antennae: Group[];
-  legs: LegRig[];
-  wings: WingRig[];
-  materials: MeshStandardMaterial[];
-  baseEmissive: number[];
+  legs: Group[];
+  wings: Mesh[];
+  wingsLeft?: Group;
+  wingsRight?: Group;
+  materials: Material[];
   phase: number;
   hitTimer: number;
   deathTimer: number;
-  variant: InsectVariant;
+  mixer?: AnimationMixer;
+  actions?: Record<string, AnimationAction>;
 }
 
-interface Palette {
-  head: number;
-  thorax: number;
-  abdomen: number;
-  accent: number;
-  wing: number;
-  eye: number;
-  eyeEmissive: number;
-  leg: number;
-  tibia: number;
-}
-
-const palettes: Record<InsectVariant, Palette> = {
-  fly: {
-    head: 0x24344a,
-    thorax: 0x148d8c,
-    abdomen: 0x1f4951,
-    accent: 0xffd447,
-    wing: 0x75f7ff,
-    eye: 0xff5a36,
-    eyeEmissive: 0xd82e1d,
-    leg: 0x243d48,
-    tibia: 0x466875,
-  },
-  wasp: {
-    head: 0x281a1a,
-    thorax: 0xd28728,
-    abdomen: 0x21151b,
-    accent: 0xf6c53e,
-    wing: 0xffe69a,
-    eye: 0x9a4c14,
-    eyeEmissive: 0x6d250c,
-    leg: 0x3d251c,
-    tibia: 0x74502b,
-  },
-  beetle: {
-    head: 0x121b2e,
-    thorax: 0x164a69,
-    abdomen: 0x092435,
-    accent: 0x4eeeff,
-    wing: 0x4db6d0,
-    eye: 0xffd76a,
-    eyeEmissive: 0xd66b1b,
-    leg: 0x0c1325,
-    tibia: 0x293c61,
-  },
-  'drone-hornet': {
-    head: 0x24122b,
-    thorax: 0x8e3fb8,
-    abdomen: 0x34174b,
-    accent: 0xff4ba8,
-    wing: 0xa78aff,
-    eye: 0xd847b6,
-    eyeEmissive: 0x9d1e8d,
-    leg: 0x251533,
-    tibia: 0x52315d,
-  },
+const ASSET_NAMES: Record<InsectVariant, InsectAssetName> = {
+  fly: 'fly',
+  wasp: 'wasp',
+  beetle: 'ladybird',
+  'drone-hornet': 'bee-enemy',
 };
 
-const wingLengths: Record<InsectVariant, number> = {
-  fly: 1.2,
-  wasp: 1.35,
-  beetle: 0.9,
-  'drone-hornet': 1.5,
+/** Target body length (z extent) after normalisation, in arena units. */
+const TARGET_LENGTH: Record<InsectVariant, number> = {
+  fly: 1.15,
+  wasp: 1.3,
+  beetle: 1.2,
+  'drone-hornet': 1.4,
 };
 
-function standard(
-  color: number,
-  emissive = color,
-  emissiveIntensity = 0.15,
-  metalness = 0.35,
-  roughness = 0.45,
-): MeshStandardMaterial {
-  return new MeshStandardMaterial({
+/* ------------------------------------------------------------------ */
+/* Materials (shared by the GLB path and the procedural fallback)      */
+/* ------------------------------------------------------------------ */
+
+function chitin(color: number, roughness = 0.62, sheen = 0.3): MeshPhysicalMaterial {
+  return new MeshPhysicalMaterial({
     color,
-    emissive,
-    emissiveIntensity,
-    metalness,
     roughness,
+    metalness: 0,
+    clearcoat: 0.35,
+    clearcoatRoughness: 0.4,
+    sheen,
+    sheenColor: 0x6b5a48,
+    emissive: 0x000000,
+    emissiveIntensity: 0,
   });
 }
 
-function registerMaterial(rig: InsectRig, material: MeshStandardMaterial): MeshStandardMaterial {
-  rig.materials.push(material);
-  rig.baseEmissive.push(material.emissiveIntensity);
-  material.userData.baseEmissiveColor = material.emissive.getHex();
+function compoundEye(): MeshPhysicalMaterial {
+  const material = new MeshPhysicalMaterial({
+    color: 0x5a1f1a,
+    roughness: 0.25,
+    metalness: 0,
+    clearcoat: 1,
+    iridescence: 0.9,
+    iridescenceIOR: 1.6,
+    iridescenceThicknessRange: [120, 480],
+    emissive: 0x000000,
+    emissiveIntensity: 0,
+  });
+  material.userData['keepColor'] = true;
   return material;
 }
 
-function addMesh<T extends Mesh>(parent: Group | Mesh, object: T): T {
-  object.castShadow = true;
-  object.receiveShadow = false;
-  parent.add(object);
-  return object;
-}
-
-function makeCapsule(
-  radius: number,
-  length: number,
-  material: MeshStandardMaterial,
-  position: [number, number, number],
-  scale: [number, number, number] = [1, 1, 1],
-): Mesh {
-  const object = new Mesh(new CapsuleGeometry(radius, length, 10, 16), material);
-  object.position.set(...position);
-  object.scale.set(...scale);
-  object.rotation.x = Math.PI / 2;
-  return object;
-}
-
-function addEyes(rig: InsectRig, palette: Palette, head: Group): void {
-  const eyeMaterial = registerMaterial(
-    rig,
-    new MeshStandardMaterial({
-      color: palette.eye,
-      emissive: palette.eyeEmissive,
-      emissiveIntensity: 0.35,
-      metalness: 0.1,
-      roughness: 0.15,
-      flatShading: true,
-    }),
-  );
-  const facetMaterial = registerMaterial(
-    rig,
-    new MeshStandardMaterial({
-      color: palette.eye,
-      emissive: palette.eyeEmissive,
-      emissiveIntensity: 0.45,
-      metalness: 0.08,
-      roughness: 0.12,
-    }),
-  );
-  for (const side of [-1, 1]) {
-    const eye = addMesh(head, new Mesh(new IcosahedronGeometry(0.17, 2), eyeMaterial));
-    eye.position.set(side * 0.27, 0.07, 0.2);
-    eye.rotation.y = side * 0.25;
-    eye.scale.set(0.85, 1.1, 1);
-    rig.eyes.push(eye);
-    for (let facet = 0; facet < 12; facet += 1) {
-      const longitude = (facet % 4) * Math.PI / 2 + Math.PI / 4;
-      const latitude = facet < 4 ? 0.35 : facet < 8 ? 0.95 : 1.45;
-      const point = addMesh(eye, new Mesh(new SphereGeometry(0.02, 5, 4), facetMaterial));
-      point.position.set(
-        Math.sin(latitude) * Math.cos(longitude) * 0.17,
-        Math.cos(latitude) * 0.17,
-        Math.sin(latitude) * Math.sin(longitude) * 0.17,
-      );
-    }
-  }
-  for (let index = 0; index < 3; index += 1) {
-    const angle = (index / 3) * Math.PI * 2 + Math.PI / 6;
-    const ocellus = addMesh(head, new Mesh(new SphereGeometry(0.035, 7, 5), facetMaterial));
-    ocellus.position.set(Math.cos(angle) * 0.07, 0.29, Math.sin(angle) * 0.04);
-  }
-}
-
-function addAntennae(rig: InsectRig, palette: Palette, variant: InsectVariant, head: Group): void {
-  const material = registerMaterial(rig, standard(palette.accent, palette.accent, 0.12, 0.28, 0.4));
-  const length = variant === 'fly' ? 0.28 : variant === 'beetle' ? 0.38 : 0.5;
-  for (const side of [-1, 1]) {
-    const antenna = new Group();
-    antenna.position.set(side * 0.12, 0.27, 0.02);
-    antenna.rotation.z = side * 0.18;
-    antenna.userData.baseRotationZ = antenna.rotation.z;
-    head.add(antenna);
-    rig.antennae.push(antenna);
-    const scape = addMesh(
-      antenna,
-      new Mesh(new CylinderGeometry(0.022, 0.032, length * 0.55, 7), material),
-    );
-    scape.position.y = length * 0.275;
-    const flagellum = addMesh(
-      antenna,
-      new Mesh(new CylinderGeometry(0.012, 0.018, length * 0.65, 7), material),
-    );
-    flagellum.position.set(side * length * 0.08, length * 0.78, 0.02);
-    flagellum.rotation.z = -side * 0.2;
-    const tip = addMesh(antenna, new Mesh(new SphereGeometry(variant === 'beetle' ? 0.07 : 0.035, 8, 6), material));
-    tip.position.set(side * length * 0.16, length * 1.12, 0.03);
-    if (variant === 'fly') {
-      const arista = addMesh(
-        antenna,
-        new Mesh(
-          new PlaneGeometry(0.012, 0.2),
-          new MeshStandardMaterial({
-            color: palette.accent,
-            emissive: palette.accent,
-            emissiveIntensity: 0.08,
-            transparent: true,
-            opacity: 0.8,
-            side: DoubleSide,
-          }),
-        ),
-      );
-      arista.position.set(side * 0.16, length * 1.16, 0);
-      arista.rotation.z = side * 0.35;
-    }
-  }
-}
-
-function addMandibles(rig: InsectRig, palette: Palette, head: Group): void {
-  const material = registerMaterial(rig, standard(palette.accent, palette.accent, 0.12, 0.4, 0.35));
-  for (const side of [-1, 1]) {
-    const mandible = addMesh(head, new Mesh(new ConeGeometry(0.055, 0.3, 7), material));
-    mandible.position.set(side * 0.12, -0.08, 0.34);
-    mandible.rotation.x = Math.PI / 2;
-    mandible.rotation.z = side * 0.25;
-  }
-}
-
-function addThoraxDetails(rig: InsectRig, palette: Palette, variant: InsectVariant, thorax: Mesh): void {
-  if (variant === 'fly' || variant === 'wasp') {
-    const bump = addMesh(thorax, new Mesh(new SphereGeometry(0.18, 10, 7), registerMaterial(rig, standard(palette.accent))));
-    bump.position.set(0, 0.32, -0.16);
-    bump.scale.set(1, 0.55, 0.8);
-  }
-  if (variant === 'drone-hornet') {
-    const material = registerMaterial(rig, standard(palette.accent, palette.accent, 0.2, 0.4, 0.3));
-    for (const side of [-1, 1]) {
-      const vent = addMesh(thorax, new Mesh(new CylinderGeometry(0.05, 0.05, 0.24, 8), material));
-      vent.position.set(side * 0.34, 0.04, 0);
-      vent.rotation.z = Math.PI / 2;
-    }
-  }
-}
-
-function addAbdomenDetails(rig: InsectRig, palette: Palette, variant: InsectVariant, abdomen: Mesh): void {
-  if (variant === 'wasp' || variant === 'drone-hornet') {
-    const waist = addMesh(rig.root, new Mesh(new CylinderGeometry(0.1, 0.14, 0.22, 10), registerMaterial(rig, standard(palette.head))));
-    waist.position.set(0, 0, -0.36);
-    waist.rotation.x = Math.PI / 2;
-    const stripeMaterial = registerMaterial(rig, standard(palette.accent, palette.accent, 0.16, 0.38, 0.34));
-    const stripeRadii = [0.29, 0.27, 0.24];
-    for (let index = 0; index < stripeRadii.length; index += 1) {
-      const stripe = addMesh(
-        rig.root,
-        new Mesh(new TorusGeometry(stripeRadii[index] ?? 0.24, 0.03, 8, 20), stripeMaterial),
-      );
-      stripe.position.set(0, 0, -0.55 - index * 0.23);
-    }
-    const stinger = addMesh(rig.root, new Mesh(new ConeGeometry(0.08, 0.34, 8), registerMaterial(rig, standard(palette.accent))));
-    stinger.position.set(0, 0, -1.24);
-    stinger.rotation.x = -Math.PI / 2;
-  } else if (variant === 'beetle') {
-    const shellMaterial = registerMaterial(rig, standard(palette.abdomen, palette.accent, 0.16, 0.7, 0.25));
-    for (const side of [-1, 1]) {
-      const elytron = addMesh(
-        rig.root,
-        new Mesh(new SphereGeometry(0.5, 16, 12, side < 0 ? 0 : Math.PI, Math.PI), shellMaterial),
-      );
-      elytron.position.set(side * 0.035, 0.18, -0.68);
-      elytron.scale.set(1, 0.55, 1.35);
-    }
-    const pronotum = addMesh(rig.root, new Mesh(new SphereGeometry(0.38, 12, 8), shellMaterial));
-    pronotum.position.set(0, 0.2, -0.3);
-    pronotum.scale.set(1.05, 0.35, 0.65);
-  } else {
-    const ringMaterial = registerMaterial(rig, standard(palette.head, palette.head, 0.08, 0.3, 0.5));
-    for (let index = 0; index < 4; index += 1) {
-      const ring = addMesh(rig.root, new Mesh(new TorusGeometry(0.295, 0.018, 7, 18), ringMaterial));
-      ring.position.set(0, 0, -0.5 - index * 0.2);
-    }
-    const haltereMaterial = registerMaterial(rig, standard(palette.accent, palette.accent, 0.1));
-    for (const side of [-1, 1]) {
-      const stalk = addMesh(rig.root, new Mesh(new CylinderGeometry(0.012, 0.018, 0.18, 6), haltereMaterial));
-      stalk.position.set(side * 0.36, 0.16, -0.36);
-      stalk.rotation.z = side * 0.55;
-      const ball = addMesh(rig.root, new Mesh(new SphereGeometry(0.06, 7, 5), haltereMaterial));
-      ball.position.set(side * 0.45, 0.16, -0.38);
-    }
-  }
-  abdomen.userData.baseRotationX = abdomen.rotation.x;
-}
-
-function createWingGeometry(length: number): ShapeGeometry {
-  const shape = new Shape();
-  shape.moveTo(0, 0);
-  shape.lineTo(length * 0.42, length * 0.12);
-  shape.lineTo(length * 0.84, length * 0.2);
-  shape.lineTo(length, length * 0.08);
-  shape.lineTo(length * 0.78, -length * 0.12);
-  shape.lineTo(length * 0.35, -length * 0.08);
-  shape.lineTo(0, 0);
-  const geometry = new ShapeGeometry(shape, 12);
-  const positions = geometry.getAttribute('position');
-  for (let index = 0; index < positions.count; index += 1) {
-    const span = Math.max(0, Math.min(1, positions.getX(index) / length));
-    positions.setY(index, positions.getY(index) + 0.06 * Math.sin(Math.PI * span));
-  }
-  positions.needsUpdate = true;
-  geometry.computeVertexNormals();
-  return geometry;
-}
-
-function addWing(
-  rig: InsectRig,
-  palette: Palette,
-  variant: InsectVariant,
-  side: number,
-  length: number,
-  hind = false,
-): void {
-  const pivot = new Group();
-  pivot.position.set(side * 0.22, 0.3, hind ? -0.18 : 0.05);
-  pivot.rotation.y = side * (0.42 + (hind ? 0.08 : 0));
-  pivot.rotation.x = -Math.PI / 2;
-  pivot.rotation.z = side * 0.15;
-  pivot.scale.x = side;
-  rig.root.add(pivot);
-  const membraneMaterial = new MeshPhysicalMaterial({
-    color: palette.wing,
-    emissive: palette.wing,
-    emissiveIntensity: 0.35,
+function wingMembrane(): MeshPhysicalMaterial {
+  const material = new MeshPhysicalMaterial({
+    color: 0xcfc6ae,
     transparent: true,
-    opacity: variant === 'beetle' ? 0.3 : 0.45,
+    opacity: 0.42,
+    transmission: 0.6,
     roughness: 0.15,
     metalness: 0,
-    transmission: 0,
-    iridescence: 0.6,
-    iridescenceIOR: 1.3,
-    clearcoat: 0.8,
+    ior: 1.35,
+    iridescence: 0.5,
     side: DoubleSide,
     depthWrite: false,
+    emissive: 0x000000,
+    emissiveIntensity: 0,
   });
-  const membrane = addMesh(pivot, new Mesh(createWingGeometry(length), membraneMaterial));
-  membrane.name = `${variant}-wing-membrane`;
-  const points: number[] = [];
-  for (let index = 1; index <= 5; index += 1) {
-    const span = index / 6;
-    points.push(0, 0, 0, length * span, length * (0.18 - span * 0.08), 0);
+  if (typeof document !== 'undefined') {
+    material.map = createWingVenationTexture();
   }
-  points.push(0, 0, 0, length * 0.75, length * 0.19, 0);
-  points.push(0, 0, 0, length * 0.5, -length * 0.1, 0);
-  const veinGeometry = new BufferGeometry();
-  veinGeometry.setAttribute('position', new Float32BufferAttribute(points, 3));
-  const veins = new LineSegments(
-    veinGeometry,
-    new LineBasicMaterial({ color: palette.accent, transparent: true, opacity: 0.7 }),
-  );
-  veins.castShadow = false;
-  pivot.add(veins);
-  rig.wings.push({ pivot, membrane, veins });
+  material.userData['keepColor'] = true;
+  return material;
 }
 
-function addWings(rig: InsectRig, palette: Palette, variant: InsectVariant): void {
-  const length = wingLengths[variant];
-  addWing(rig, palette, variant, -1, length);
-  addWing(rig, palette, variant, 1, length);
-  if (variant === 'drone-hornet') {
-    addWing(rig, palette, variant, -1, length * 0.68, true);
-    addWing(rig, palette, variant, 1, length * 0.68, true);
-  } else if (variant === 'beetle') {
-    addWing(rig, palette, variant, -1, length * 0.6, true);
-    addWing(rig, palette, variant, 1, length * 0.6, true);
-    for (const wing of rig.wings.slice(2)) {
-      wing.pivot.scale.multiplyScalar(0.6);
-      (wing.membrane.material as MeshPhysicalMaterial).opacity = 0.3;
+const BODY_MATERIAL_NAMES: Record<InsectVariant, Record<string, () => Material>> = {
+  fly: {
+    Body: () => chitin(0x3a2f2a, 0.6, 0.35),
+    Thorax: () => chitin(0x6b5a48),
+    Eyes: () => compoundEye(),
+    Wings: () => wingMembrane(),
+  },
+  wasp: {
+    Black: () => chitin(0x1c1710, 0.58),
+    Orange: () => chitin(0xc98a2a, 0.55, 0.35),
+    Yellow: () => chitin(0xc98a2a, 0.55, 0.35),
+    LightBlue: () => wingMembrane(),
+  },
+  beetle: {
+    red: () => chitin(0x9c2f22, 0.55, 0.4),
+    black: () => chitin(0x14110f, 0.6),
+    'black.001': () => chitin(0x14110f, 0.6),
+  },
+  'drone-hornet': {
+    Main: () => chitin(0x8a6a2c, 0.6, 0.35),
+    Main_2: () => chitin(0x1a1512, 0.62),
+    Eyes: () => compoundEye(),
+    Wings: () => wingMembrane(),
+    Tongue: () => chitin(0x4a3325, 0.7, 0),
+    Teeth: () => chitin(0x6a5c48, 0.7, 0),
+  },
+};
+
+function materialFor(name: string, variant: InsectVariant): Material {
+  const factory = BODY_MATERIAL_NAMES[variant][name];
+  return factory ? factory() : chitin(0x4a3d30);
+}
+
+/* ------------------------------------------------------------------ */
+/* GLB-backed rigs                                                     */
+/* ------------------------------------------------------------------ */
+
+function meshCentroidZ(mesh: Mesh): number {
+  const geometry = mesh.geometry as BufferGeometry;
+  const position = geometry.getAttribute('position') as BufferAttribute | undefined;
+  if (!position) return 0;
+  const point = new Vector3();
+  let sum = 0;
+  for (let index = 0; index < position.count; index += 1) {
+    point.fromBufferAttribute(position, index);
+    mesh.localToWorld(point);
+    sum += point.z;
+  }
+  return position.count > 0 ? sum / position.count : 0;
+}
+
+/**
+ * Find the world-space z of the "head" end of the model so it can be rotated
+ * to face +z. Uses named bones for skinned models and material centroids for
+ * static ones.
+ */
+function headZ(inner: Object3D, variant: InsectVariant): number {
+  inner.updateWorldMatrix(true, true);
+  const boneZ = (name: string): number | undefined => {
+    const node = inner.getObjectByName(name);
+    if (!node) return undefined;
+    return node.getWorldPosition(new Vector3()).z;
+  };
+  if (variant === 'wasp') {
+    const head = boneZ('Head');
+    const sting = boneZ('Sting');
+    if (head !== undefined && sting !== undefined) {
+      return head - sting;
     }
   }
+  if (variant === 'drone-hornet') {
+    const mouth = boneZ('Mouth') ?? boneZ('Head');
+    const body = boneZ('Body');
+    if (mouth !== undefined && body !== undefined) {
+      return mouth - body;
+    }
+  }
+  // static models: centroid of the head-ish material (eyes / black head parts)
+  const headMaterialNames = variant === 'fly' ? ['Eyes'] : ['black', 'black.001'];
+  let sum = 0;
+  let count = 0;
+  inner.traverse((node) => {
+    const mesh = node as Mesh;
+    if (!mesh.isMesh) return;
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    if (materials.some((material) => headMaterialNames.includes(material?.name ?? ''))) {
+      sum += meshCentroidZ(mesh);
+      count += 1;
+    }
+  });
+  return count > 0 ? sum : 0;
 }
 
-function addLeg(rig: InsectRig, palette: Palette, side: number, index: number): void {
-  const hip = new Group();
-  hip.position.set(side * 0.28, -0.17, 0.32 - index * 0.32);
-  hip.rotation.z = side * 0.9;
-  hip.rotation.x = index === 0 ? 0.5 : index === 2 ? -0.6 : 0;
-  hip.userData.baseRotationX = hip.rotation.x;
-  rig.root.add(hip);
-  const femurMaterial = rig.materials.find((material) => material.color.getHex() === palette.leg)
-    ?? registerMaterial(rig, standard(palette.leg, palette.leg, 0.08, 0.25, 0.5));
-  const tibiaMaterial = rig.materials.find((material) => material.color.getHex() === palette.tibia)
-    ?? registerMaterial(rig, standard(palette.tibia, palette.tibia, 0.06, 0.25, 0.48));
-  const femurLength = 0.45;
-  const tibiaLength = 0.42;
-  const femur = addMesh(hip, new Mesh(new CylinderGeometry(0.035, 0.05, femurLength, 7), femurMaterial));
-  femur.position.y = -femurLength / 2;
-  const knee = new Group();
-  knee.position.y = -femurLength;
-  knee.rotation.z = -side * 1.1;
-  knee.userData.baseRotationZ = knee.rotation.z;
-  hip.add(knee);
-  const tibia = addMesh(knee, new Mesh(new CylinderGeometry(0.022, 0.033, tibiaLength, 7), tibiaMaterial));
-  tibia.position.y = -tibiaLength / 2;
-  const ankle = new Group();
-  ankle.position.y = -tibiaLength;
-  knee.add(ankle);
-  const tarsus = addMesh(ankle, new Mesh(new CylinderGeometry(0.012, 0.02, 0.22, 7), tibiaMaterial));
-  tarsus.position.y = -0.11;
-  const claw = addMesh(ankle, new Mesh(new SphereGeometry(0.035, 6, 5), femurMaterial));
-  claw.position.y = -0.23;
-  rig.legs.push({ hip, knee, ankle, side, index });
+function splitWings(inner: Object3D, rig: InsectRig): void {
+  let wingMesh: Mesh | undefined;
+  inner.traverse((node) => {
+    const mesh = node as Mesh;
+    if (!mesh.isMesh || wingMesh) return;
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    if (materials.some((material) => material?.name === 'Wings')) {
+      wingMesh = mesh;
+    }
+  });
+  if (!wingMesh) return;
+  const geometry = wingMesh.geometry as BufferGeometry;
+  const position = geometry.getAttribute('position') as BufferAttribute;
+  const normal = geometry.getAttribute('normal') as BufferAttribute | undefined;
+  const uv = geometry.getAttribute('uv') as BufferAttribute | undefined;
+  const index = geometry.getIndex();
+  const triangleCount = index ? index.count / 3 : position.count / 3;
+  const vertexAt = (i: number) => (index ? index.getX(i) : i);
+
+  const left: number[] = [];
+  const right: number[] = [];
+  const centroid = new Vector3();
+  for (let t = 0; t < triangleCount; t += 1) {
+    centroid.set(0, 0, 0);
+    for (let k = 0; k < 3; k += 1) {
+      centroid.x += position.getX(vertexAt(t * 3 + k));
+    }
+    (centroid.x < 0 ? left : right).push(t);
+  }
+
+  const buildHalf = (triangles: number[]): { geometry: BufferGeometry; root: Vector3 } => {
+    const positions: number[] = [];
+    const normals: number[] = [];
+    const uvs: number[] = [];
+    let minAbsX = Infinity;
+    for (const t of triangles) {
+      for (let k = 0; k < 3; k += 1) {
+        minAbsX = Math.min(minAbsX, Math.abs(position.getX(vertexAt(t * 3 + k))));
+      }
+    }
+    const root = new Vector3();
+    let rootCount = 0;
+    for (const t of triangles) {
+      for (let k = 0; k < 3; k += 1) {
+        const v = vertexAt(t * 3 + k);
+        positions.push(position.getX(v), position.getY(v), position.getZ(v));
+        if (normal) normals.push(normal.getX(v), normal.getY(v), normal.getZ(v));
+        if (uv) uvs.push(uv.getX(v), uv.getY(v));
+        if (Math.abs(position.getX(v)) <= minAbsX * 1.5) {
+          root.add(new Vector3(position.getX(v), position.getY(v), position.getZ(v)));
+          rootCount += 1;
+        }
+      }
+    }
+    if (rootCount > 0) root.divideScalar(rootCount);
+    const half = new BufferGeometry();
+    half.setAttribute('position', new BufferAttribute(new Float32Array(positions), 3));
+    if (normals.length === positions.length) {
+      half.setAttribute('normal', new BufferAttribute(new Float32Array(normals), 3));
+    } else {
+      half.computeVertexNormals();
+    }
+    if (uvs.length > 0) half.setAttribute('uv', new BufferAttribute(new Float32Array(uvs), 2));
+    return { geometry: half, root };
+  };
+
+  const parent = wingMesh.parent ?? inner;
+  const holder = new Group();
+  holder.name = 'wings-split';
+  holder.position.copy(wingMesh.position);
+  holder.quaternion.copy(wingMesh.quaternion);
+  holder.scale.copy(wingMesh.scale);
+  parent.add(holder);
+  parent.remove(wingMesh);
+
+  const membrane = wingMembrane();
+  const halves: [Group | undefined, number[]][] = [[undefined, left], [undefined, right]];
+  const pivots: Group[] = [];
+  for (const [, triangles] of halves) {
+    if (triangles.length === 0) continue;
+    const { geometry: half, root } = buildHalf(triangles);
+    const pivot = new Group();
+    pivot.position.copy(root);
+    const mesh = new Mesh(half, membrane);
+    mesh.castShadow = true;
+    mesh.position.set(-root.x, -root.y, -root.z);
+    pivot.add(mesh);
+    holder.add(pivot);
+    pivots.push(pivot);
+  }
+  // left wing = negative x side
+  rig.wingsLeft = pivots.find((p) => p.position.x < 0) ?? pivots[0];
+  rig.wingsRight = pivots.find((p) => p.position.x >= 0) ?? pivots[1] ?? pivots[0];
 }
 
-function addLegs(rig: InsectRig, palette: Palette): void {
+function addBeetleLegs(rig: InsectRig): void {
+  const material = chitin(0x14110f, 0.7, 0);
   for (const side of [-1, 1]) {
     for (let index = 0; index < 3; index += 1) {
-      addLeg(rig, palette, side, index);
+      const leg = new Group();
+      const limb = new Mesh(new CylinderGeometry(0.02, 0.035, 0.5, 6), material);
+      limb.position.y = -0.22;
+      limb.rotation.z = side * 0.5;
+      leg.add(limb);
+      leg.position.set(side * (0.28 + index * 0.06), -0.28, (index - 1) * 0.35);
+      rig.root.add(leg);
+      rig.legs.push(leg);
     }
   }
 }
 
-function restoreMaterial(material: MeshStandardMaterial, index: number, rig: InsectRig): void {
-  material.emissive.setHex(material.userData.baseEmissiveColor as number);
-  material.emissiveIntensity = rig.baseEmissive[index] ?? 0.15;
-}
-
-export function createInsectMesh(variant: InsectVariant, phase = 0): InsectRig {
-  const palette = palettes[variant];
+function tryLoadRig(variant: InsectVariant, phase: number): InsectRig | undefined {
+  const template = getTemplate(ASSET_NAMES[variant]);
+  if (!template) {
+    return undefined;
+  }
+  const inner = cloneSkeleton(template.scene);
   const root = new Group();
-  root.name = `${variant}-procedural-insect`;
+  root.name = `${variant}-glb-insect`;
+  root.add(inner);
   const rig: InsectRig = {
-    root,
-    head: new Group(),
-    thorax: new Mesh(),
-    abdomen: new Mesh(),
-    eyes: [],
-    antennae: [],
-    legs: [],
-    wings: [],
-    materials: [],
-    baseEmissive: [],
-    phase,
-    hitTimer: 0,
-    deathTimer: 0,
-    variant,
+    root, legs: [], wings: [], materials: [], phase, hitTimer: 0, deathTimer: 0,
   };
-  rig.head.position.set(0, 0.04, 0.62);
-  root.add(rig.head);
-  const headMaterial = registerMaterial(rig, standard(palette.head, palette.head, 0.2));
-  const thoraxMaterial = registerMaterial(
-    rig,
-    standard(
-      palette.thorax,
-      palette.thorax,
-      0.22,
-      variant === 'beetle' ? 0.7 : 0.35,
-      variant === 'beetle' ? 0.25 : 0.45,
-    ),
-  );
-  const abdomenMaterial = registerMaterial(
-    rig,
-    standard(
-      palette.abdomen,
-      palette.abdomen,
-      0.22,
-      variant === 'beetle' ? 0.7 : 0.35,
-      variant === 'beetle' ? 0.25 : 0.45,
-    ),
-  );
-  const headMesh = addMesh(rig.head, new Mesh(new SphereGeometry(0.32, 16, 12), headMaterial));
-  headMesh.scale.set(1, 0.9, 1.05);
-  rig.thorax = addMesh(rig.root, makeCapsule(0.38, 0.52, thoraxMaterial, [0, 0, 0], [1, 0.95, 1]));
-  rig.abdomen = addMesh(
-    rig.root,
-    makeCapsule(
-      variant === 'beetle' ? 0.38 : 0.32,
-      variant === 'beetle' ? 0.72 : 0.66,
-      abdomenMaterial,
-      [0, variant === 'beetle' ? 0.04 : 0, -0.75],
-      variant === 'beetle' ? [1.1, 0.8, 1.2] : [1, 0.88, variant === 'wasp' || variant === 'drone-hornet' ? 1.3 : 1.1],
-    ),
-  );
-  if (variant === 'wasp' || variant === 'drone-hornet') {
-    rig.abdomen.rotation.x = variant === 'drone-hornet' ? 0.08 : 0.05;
+
+  // Face +z: rotate so the longest horizontal axis is z, then check which
+  // end the head is on.
+  inner.updateWorldMatrix(true, true);
+  let box = new Box3().setFromObject(inner);
+  let size = box.getSize(new Vector3());
+  if (size.x > size.z) {
+    inner.rotateY(Math.PI / 2);
+    inner.updateWorldMatrix(true, true);
   }
-  addEyes(rig, palette, rig.head);
-  addAntennae(rig, palette, variant, rig.head);
-  if (variant === 'beetle' || variant === 'drone-hornet') {
-    addMandibles(rig, palette, rig.head);
+  if (headZ(inner, variant) < 0) {
+    inner.rotateY(Math.PI);
+    inner.updateWorldMatrix(true, true);
   }
-  addThoraxDetails(rig, palette, variant, rig.thorax);
-  addAbdomenDetails(rig, palette, variant, rig.abdomen);
-  addWings(rig, palette, variant);
-  addLegs(rig, palette);
-  rig.root.traverse((object) => {
-    if (object instanceof Mesh) {
-      object.castShadow = true;
-      object.receiveShadow = false;
+
+  // Normalise scale (body length along z) and centre at the origin.
+  box = new Box3().setFromObject(inner);
+  size = box.getSize(new Vector3());
+  const scale = TARGET_LENGTH[variant] / Math.max(1e-4, size.z);
+  inner.scale.multiplyScalar(scale);
+  inner.updateWorldMatrix(true, true);
+  box = new Box3().setFromObject(inner);
+  const center = box.getCenter(new Vector3());
+  inner.position.sub(center);
+
+  if (variant === 'fly') {
+    splitWings(inner, rig);
+  }
+  if (variant === 'beetle') {
+    addBeetleLegs(rig);
+  }
+
+  // Replace materials with the project's chitin/eye/membrane set.
+  inner.traverse((node) => {
+    const mesh = node as Mesh;
+    if (!mesh.isMesh) return;
+    mesh.castShadow = true;
+    mesh.receiveShadow = false;
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const replaced = materials.map((material) => materialFor(material?.name ?? '', variant));
+    mesh.material = Array.isArray(mesh.material) ? replaced : replaced[0]!;
+    for (const material of replaced) {
+      // Wing membranes are transparent and stay out of the flash set.
+      if (!(material instanceof MeshPhysicalMaterial && material.transparent)
+        && !rig.materials.includes(material)) {
+        rig.materials.push(material);
+      }
     }
   });
+
+  // Animations for skinned models.
+  if (template.animations.length > 0) {
+    rig.mixer = new AnimationMixer(inner);
+    rig.actions = {};
+    for (const clip of template.animations) {
+      rig.actions[clip.name] = rig.mixer.clipAction(clip);
+    }
+    const flying = Object.entries(rig.actions).find(([name]) => /flying/i.test(name));
+    if (flying) {
+      flying[1].play();
+    }
+  }
+
   root.userData.insectRig = rig;
   return rig;
 }
 
+/* ------------------------------------------------------------------ */
+/* Procedural fallback rig (organic night-garden palette)              */
+/* ------------------------------------------------------------------ */
+
+const palettes: Record<InsectVariant, {
+  head: number;
+  thorax: number;
+  abdomen: number;
+  accent: number;
+}> = {
+  fly: { head: 0x2a211b, thorax: 0x6b5a48, abdomen: 0x3a2f2a, accent: 0x8a7a4c },
+  wasp: { head: 0x1c1710, thorax: 0xc98a2a, abdomen: 0x1c1710, accent: 0xc98a2a },
+  beetle: { head: 0x14110f, thorax: 0x3a3030, abdomen: 0x9c2f22, accent: 0x66705c },
+  'drone-hornet': { head: 0x1a1512, thorax: 0x8a6a2c, abdomen: 0x1a1512, accent: 0xd9a441 },
+};
+
+function addSegment(
+  root: Group,
+  geometry: CapsuleGeometry | SphereGeometry,
+  material: MeshPhysicalMaterial,
+  position: [number, number, number],
+  scale: [number, number, number],
+): Mesh {
+  const mesh = new Mesh(geometry, material);
+  mesh.position.set(...position);
+  mesh.scale.set(...scale);
+  mesh.castShadow = true;
+  root.add(mesh);
+  return mesh;
+}
+
+function addLeg(rig: InsectRig, side: number, index: number, material: MeshPhysicalMaterial): void {
+  const leg = new Group();
+  const upper = new Mesh(new CylinderGeometry(0.03, 0.05, 0.48, 6), material);
+  const lower = new Mesh(new CylinderGeometry(0.018, 0.03, 0.42, 6), material);
+  upper.rotation.z = side * (0.72 + index * 0.08);
+  lower.position.y = -0.25;
+  lower.rotation.z = side * (0.48 + index * 0.08);
+  leg.position.set(side * (0.24 + index * 0.1), -0.17, (index - 1) * 0.25);
+  leg.add(upper, lower);
+  rig.root.add(leg);
+  rig.legs.push(leg);
+}
+
+function addAntennae(root: Group, material: MeshPhysicalMaterial): void {
+  for (const side of [-1, 1]) {
+    const antenna = new Mesh(new CylinderGeometry(0.018, 0.026, 0.62, 6), material);
+    antenna.position.set(side * 0.15, 0.34, -0.7);
+    antenna.rotation.set(side * 0.35, side * 0.18, side * 0.28);
+    root.add(antenna);
+    const tip = new Mesh(new SphereGeometry(0.045, 8, 6), material);
+    tip.position.set(side * 0.26, 0.58, -0.94);
+    root.add(tip);
+  }
+}
+
+function addEyes(root: Group, rig: InsectRig): void {
+  const eyeMaterial = compoundEye();
+  rig.materials.push(eyeMaterial);
+  for (const side of [-1, 1]) {
+    const eye = new Mesh(new SphereGeometry(0.16, 10, 8), eyeMaterial);
+    eye.position.set(side * 0.22, 0.11, -0.72);
+    eye.scale.set(1, 1.15, 0.8);
+    root.add(eye);
+  }
+}
+
+function addWings(rig: InsectRig, variant: InsectVariant): void {
+  for (const side of [-1, 1]) {
+    const wing = new Mesh(
+      new CapsuleGeometry(0.07, variant === 'beetle' ? 0.58 : 0.82, 5, 8),
+      wingMembrane(),
+    );
+    wing.position.set(side * 0.48, 0.28, 0.02);
+    wing.rotation.set(0.08, side * 0.5, side * 0.18);
+    wing.scale.set(1.2, 0.55, 0.2);
+    rig.root.add(wing);
+    rig.wings.push(wing);
+  }
+}
+
+function addVariantDetails(root: Group, variant: InsectVariant, palette: (typeof palettes)[InsectVariant]): void {
+  if (variant === 'wasp' || variant === 'drone-hornet') {
+    const stripeMaterial = chitin(palette.accent, 0.55, 0.3);
+    for (let index = 0; index < 3; index += 1) {
+      const stripe = new Mesh(new BoxGeometry(0.56, 0.09, 0.72), stripeMaterial);
+      stripe.position.set(0, 0.12, 0.32 - index * 0.27);
+      root.add(stripe);
+    }
+    const stinger = new Mesh(
+      new CylinderGeometry(0.015, 0.09, 0.46, 7),
+      chitin(0x3a3128, 0.7, 0),
+    );
+    stinger.position.set(0, 0.02, 0.72);
+    stinger.rotation.x = Math.PI / 2;
+    root.add(stinger);
+  }
+  if (variant === 'beetle') {
+    const shell = new Mesh(new SphereGeometry(0.58, 14, 9), chitin(palette.abdomen, 0.55, 0.4));
+    shell.position.set(0, 0.14, 0.22);
+    shell.scale.set(1.03, 0.68, 1.2);
+    shell.castShadow = true;
+    root.add(shell);
+  }
+}
+
+function proceduralRig(variant: InsectVariant, phase: number): InsectRig {
+  const palette = palettes[variant];
+  const root = new Group();
+  root.name = `${variant}-procedural-insect`;
+  const rig: InsectRig = {
+    root, legs: [], wings: [], materials: [], phase, hitTimer: 0, deathTimer: 0,
+  };
+  const head = chitin(palette.head, 0.6);
+  const thorax = chitin(palette.thorax, 0.58, 0.35);
+  const abdomen = chitin(palette.abdomen, 0.6, 0.35);
+  const legMaterial = chitin(0x241d16, 0.7, 0);
+  rig.materials.push(head, thorax, abdomen);
+  addSegment(root, new SphereGeometry(0.35, 14, 10), head, [0, 0.05, -0.54], [1, 0.9, 1.05]);
+  addSegment(root, new CapsuleGeometry(0.42, 0.52, 10, 14), thorax, [0, 0.08, -0.05], [1, 0.95, 1]);
+  addSegment(root, new CapsuleGeometry(0.34, variant === 'beetle' ? 0.8 : 0.66, 10, 14), abdomen, [0, 0.08, 0.58], [1, 0.86, 1.1]);
+  addEyes(root, rig);
+  addAntennae(root, head);
+  addWings(rig, variant);
+  addVariantDetails(root, variant, palette);
+  for (const side of [-1, 1]) {
+    for (let index = 0; index < 3; index += 1) {
+      addLeg(rig, side, index, legMaterial);
+    }
+  }
+  root.userData.insectRig = rig;
+  return rig;
+}
+
+export function createInsectMesh(variant: InsectVariant, phase = 0): InsectRig {
+  return tryLoadRig(variant, phase) ?? proceduralRig(variant, phase);
+}
+
+/* ------------------------------------------------------------------ */
+/* Animation + hit/death                                               */
+/* ------------------------------------------------------------------ */
+
+function findAction(rig: InsectRig, pattern: RegExp): AnimationAction | undefined {
+  if (!rig.actions) return undefined;
+  const entry = Object.entries(rig.actions).find(([name]) => pattern.test(name));
+  return entry?.[1];
+}
+
 export function animateInsect(rig: InsectRig, dt: number, locomotion = 1): void {
+  rig.mixer?.update(dt);
   if (rig.deathTimer > 0) {
     rig.deathTimer = Math.max(0, rig.deathTimer - dt);
     rig.root.rotation.z += dt * 7;
@@ -544,42 +549,57 @@ export function animateInsect(rig: InsectRig, dt: number, locomotion = 1): void 
     rig.root.scale.setScalar(Math.max(0, rig.deathTimer / 0.8));
     return;
   }
-  rig.root.scale.setScalar(1);
   rig.phase += dt * (12 + locomotion * 3);
-  for (const leg of rig.legs) {
-    const tripod = (leg.side < 0 && leg.index % 2 === 0) || (leg.side > 0 && leg.index === 1);
-    const motion = rig.phase + (tripod ? 0 : Math.PI);
-    leg.hip.rotation.x = (leg.hip.userData.baseRotationX as number) + Math.sin(motion) * 0.35 * locomotion;
-    leg.knee.rotation.z =
-      (leg.knee.userData.baseRotationZ as number) - Math.max(0, Math.sin(motion)) * leg.side * 0.5 * locomotion;
+  for (const [index, leg] of rig.legs.entries()) {
+    const side = index < 3 ? 1 : -1;
+    const legIndex = index % 3;
+    leg.rotation.x = Math.sin(rig.phase + legIndex * 1.7) * 0.18 * locomotion;
+    leg.rotation.y = side * Math.cos(rig.phase + legIndex) * 0.12 * locomotion;
   }
-  const wingPhase = rig.phase * (rig.variant === 'fly' ? 3 : 2.2);
-  for (const [index, wing] of rig.wings.entries()) {
-    const side = index % 2 === 0 ? -1 : 1;
-    wing.pivot.rotation.z = side * (0.15 + Math.sin(wingPhase) * 0.55);
-    wing.pivot.rotation.x = -Math.PI / 2 + Math.sin(wingPhase + Math.PI / 2) * 0.15;
-  }
-  for (const [index, antenna] of rig.antennae.entries()) {
-    antenna.rotation.z = (antenna.userData.baseRotationZ as number) + Math.sin(rig.phase * 0.4 + index) * 0.08;
-  }
-  rig.abdomen.rotation.x = (rig.abdomen.userData.baseRotationX as number ?? 0) + Math.sin(rig.phase * 0.6) * 0.05;
-  if (rig.hitTimer > 0) {
-    rig.hitTimer = Math.max(0, rig.hitTimer - dt);
-    for (const material of rig.materials) {
-      material.emissive.setHex(0xffffff);
-      material.emissiveIntensity = 4;
-    }
+  if (rig.wingsLeft && rig.wingsRight) {
+    const flap = Math.sin(rig.phase * 1.7) * 0.55;
+    rig.wingsLeft.rotation.z = -(0.14 + flap);
+    rig.wingsRight.rotation.z = 0.14 + flap;
   } else {
-    for (const [index, material] of rig.materials.entries()) {
-      restoreMaterial(material, index, rig);
+    const flap = Math.sin(rig.phase * 1.7) * 0.42;
+    for (const [index, wing] of rig.wings.entries()) {
+      wing.rotation.z = (index === 0 ? -1 : 1) * (0.14 + flap);
+    }
+  }
+  const flashing = rig.hitTimer > 0;
+  if (flashing) {
+    rig.hitTimer = Math.max(0, rig.hitTimer - dt);
+  }
+  for (const material of rig.materials) {
+    if ('emissive' in material) {
+      const standardMaterial = material as MeshStandardMaterial;
+      if (flashing) {
+        standardMaterial.emissive.setHex(0xffffff);
+        standardMaterial.emissiveIntensity = 1.2;
+      } else {
+        standardMaterial.emissiveIntensity = 0;
+      }
     }
   }
 }
 
 export function flashInsect(rig: InsectRig): void {
   rig.hitTimer = 0.14;
+  const hit = findAction(rig, /HitRecieve|Attack/i);
+  if (hit) {
+    hit.reset();
+    hit.setLoop(LoopOnce, 1);
+    hit.play();
+  }
 }
 
 export function killInsect(rig: InsectRig): void {
   rig.deathTimer = 0.8;
+  const death = findAction(rig, /Death/i);
+  if (death) {
+    death.reset();
+    death.setLoop(LoopOnce, 1);
+    death.clampWhenFinished = true;
+    death.play();
+  }
 }

@@ -1,8 +1,7 @@
 import {
-  AdditiveBlending,
   Color,
   Mesh,
-  MeshBasicMaterial,
+  MeshStandardMaterial,
   SphereGeometry,
   Vector3,
   type Object3D,
@@ -45,11 +44,11 @@ export class ProjectilePool {
   }
 
   private createInactive(): Projectile {
-    const material = new MeshBasicMaterial({
-      color: 0x4ff6ff,
-      transparent: true,
-      opacity: 0.95,
-      blending: AdditiveBlending,
+    const material = new MeshStandardMaterial({
+      color: 0xf3e2b0,
+      emissive: 0xf3e2b0,
+      emissiveIntensity: 0.9,
+      roughness: 0.4,
     });
     const mesh = new Mesh(this.geometry, material);
     mesh.visible = false;
@@ -87,8 +86,11 @@ export class ProjectilePool {
     projectile.mesh.position.copy(position);
     projectile.mesh.scale.setScalar(projectile.radius / 0.12);
     projectile.mesh.visible = true;
-    const material = projectile.mesh.material as MeshBasicMaterial;
-    material.color = new Color(options.color ?? (options.owner === 'fly' ? 0x4ff6ff : 0xff3e8c));
+    const material = projectile.mesh.material as MeshStandardMaterial;
+    const tint = new Color(options.color ?? (options.owner === 'fly' ? 0xf3e2b0 : 0xc0602a));
+    material.color = tint;
+    material.emissive = tint;
+    material.emissiveIntensity = options.owner === 'fly' ? 0.9 : 0.55;
     projectile.active = true;
     return projectile;
   }

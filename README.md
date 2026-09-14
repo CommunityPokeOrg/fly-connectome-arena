@@ -22,14 +22,15 @@ bursts.
 
 ## Environments
 
-`game/textures.ts` generates CanvasTexture materials at startup, including
-hex-plate grime, metal wall panels with emissive seams, and hazard warning
-stripes. The seeded map is either **Hive Core** or **Neon Foundry**. The HUD
-MAP button cycles the active environment palette. Raised platforms, ramps,
-crates, pillars, pipes, light posts, holographic signs, and boundary walls
-are generated with collision bounds from the same placement data used for
-their geometry. Lighting combines a hemisphere, colored point lights, and a
-shadow-casting directional light.
+Real CC0 texture sets (forest floor, mossy stone, bark) are loaded from
+`public/textures/`, with procedural CanvasTexture fallbacks generated at
+startup, and a CC0 HDRI greenhouse provides soft image-based lighting. The
+seeded map is either **Moss Hollow** or **Amber Grove**. The HUD
+MAP button cycles the active environment palette. Lichen-covered stone
+platforms, dry reed posts, hanging seed pods, boulders, mushrooms, and a
+weathered stone boundary wall are generated with collision bounds from the
+same placement data used for their geometry. Lighting combines a hemisphere
+fill, a shadow-casting directional key light, and GTAO post-processing.
 
 ## Controls
 

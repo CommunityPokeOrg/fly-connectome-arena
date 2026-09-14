@@ -17,70 +17,107 @@ function canvasTexture(size: number, draw: (context: CanvasRenderingContext2D, s
   return texture;
 }
 
-export function createHexPlateTexture(): CanvasTexture {
-  return canvasTexture(256, (context, size) => {
-    context.fillStyle = '#071326';
+function speckle(
+  context: CanvasRenderingContext2D,
+  size: number,
+  count: number,
+  colors: string[],
+  minRadius: number,
+  maxRadius: number,
+): void {
+  let state = 123456789;
+  const next = () => {
+    state = (state * 1103515245 + 12345) & 0x7fffffff;
+    return state / 0x7fffffff;
+  };
+  for (let index = 0; index < count; index += 1) {
+    const radius = minRadius + next() * (maxRadius - minRadius);
+    context.fillStyle = colors[Math.floor(next() * colors.length)] ?? colors[0]!;
+    context.globalAlpha = 0.12 + next() * 0.3;
+    context.beginPath();
+    context.arc(next() * size, next() * size, radius, 0, Math.PI * 2);
+    context.fill();
+  }
+  context.globalAlpha = 1;
+}
+
+export function createMossFloorTexture(): CanvasTexture {
+  const texture = canvasTexture(512, (context, size) => {
+    context.fillStyle = '#26301e';
     context.fillRect(0, 0, size, size);
-    const radius = 22;
-    for (let row = -1; row < 8; row += 1) {
-      for (let column = -1; column < 8; column += 1) {
-        const x = column * radius * 1.72 + (row % 2) * radius * 0.86;
-        const y = row * radius * 1.5;
-        context.beginPath();
-        for (let index = 0; index < 6; index += 1) {
-          const angle = Math.PI / 6 + index * Math.PI / 3;
-          const pointX = x + Math.cos(angle) * radius * 0.82;
-          const pointY = y + Math.sin(angle) * radius * 0.82;
-          if (index === 0) context.moveTo(pointX, pointY);
-          else context.lineTo(pointX, pointY);
-        }
-        context.closePath();
-        context.fillStyle = (row + column) % 3 === 0 ? '#0b1d34' : '#09182b';
-        context.fill();
-        context.strokeStyle = '#164762';
-        context.lineWidth = 1.5;
-        context.stroke();
-        if ((row * 7 + column) % 5 === 0) {
-          context.fillStyle = '#8d394c55';
-          context.fillRect(x - 5, y - 2, 11, 3);
-        }
-      }
+    speckle(context, size, 900, ['#2f3d24', '#3d4b2a', '#22301c', '#4a4326', '#31402b'], 6, 26);
+    speckle(context, size, 500, ['#1c2417', '#55603a', '#3a2f22'], 2, 8);
+    speckle(context, size, 120, ['#6a7040', '#8a7a4c'], 1, 3);
+  });
+  texture.repeat.set(4, 4);
+  return texture;
+}
+
+export function createStoneTexture(): CanvasTexture {
+  return canvasTexture(256, (context, size) => {
+    context.fillStyle = '#5a5d58';
+    context.fillRect(0, 0, size, size);
+    speckle(context, size, 320, ['#4c4f4a', '#686b64', '#3f423e', '#767a70'], 4, 18);
+    speckle(context, size, 140, ['#33362f', '#8b8f83'], 1, 4);
+    // faint horizontal weathering bands
+    context.globalAlpha = 0.1;
+    for (let y = 0; y < size; y += 24) {
+      context.fillStyle = y % 48 === 0 ? '#2f322d' : '#787c72';
+      context.fillRect(0, y, size, 6);
     }
+    context.globalAlpha = 1;
   });
 }
 
-export function createMetalWallTexture(): CanvasTexture {
-  return canvasTexture(256, (context, size) => {
-    context.fillStyle = '#111827';
-    context.fillRect(0, 0, size, size);
-    for (let index = 0; index < 8; index += 1) {
-      const offset = index * 32;
-      context.fillStyle = index % 2 === 0 ? '#182940' : '#122136';
-      context.fillRect(offset + 2, 0, 27, size);
-      context.fillStyle = '#36d8ed';
-      context.globalAlpha = 0.22;
-      context.fillRect(offset, 0, 2, size);
-      context.globalAlpha = 1;
-      context.fillStyle = '#00000044';
-      context.fillRect(offset + 4, 8, 19, 2);
-      context.fillRect(offset + 4, size - 12, 19, 2);
-    }
-  });
-}
-
-export function createWarningStripeTexture(): CanvasTexture {
+export function createBarkTexture(): CanvasTexture {
   return canvasTexture(128, (context, size) => {
-    context.fillStyle = '#2b1029';
+    context.fillStyle = '#2b241d';
     context.fillRect(0, 0, size, size);
-    context.fillStyle = '#ffd447';
-    for (let x = -size; x < size * 2; x += 26) {
+    let state = 987654321;
+    const next = () => {
+      state = (state * 1103515245 + 12345) & 0x7fffffff;
+      return state / 0x7fffffff;
+    };
+    for (let x = 0; x < size; x += 6) {
+      context.strokeStyle = next() > 0.5 ? '#1e1811' : '#3a3025';
+      context.globalAlpha = 0.5 + next() * 0.4;
+      context.lineWidth = 1 + next() * 2;
       context.beginPath();
       context.moveTo(x, 0);
-      context.lineTo(x + 15, 0);
-      context.lineTo(x - 35, size);
-      context.lineTo(x - 50, size);
-      context.closePath();
-      context.fill();
+      context.bezierCurveTo(x + next() * 8 - 4, size * 0.33, x + next() * 8 - 4, size * 0.66, x, size);
+      context.stroke();
+    }
+    context.globalAlpha = 1;
+  });
+}
+
+export function createWingVenationTexture(): CanvasTexture {
+  const texture = canvasTexture(256, (context, size) => {
+    context.clearRect(0, 0, size, size);
+    // transparent membrane with dark vein strokes fanning from the root edge
+    context.fillStyle = 'rgba(210, 200, 170, 0.16)';
+    context.fillRect(0, 0, size, size);
+    context.strokeStyle = 'rgba(40, 30, 22, 0.85)';
+    context.lineWidth = 2;
+    for (let index = 0; index < 7; index += 1) {
+      const spread = (index / 6 - 0.5) * 1.8;
+      context.beginPath();
+      context.moveTo(0, size * 0.5);
+      context.bezierCurveTo(
+        size * 0.3, size * (0.5 + spread * 0.35),
+        size * 0.7, size * (0.5 + spread * 0.75),
+        size, size * (0.5 + spread),
+      );
+      context.stroke();
+    }
+    context.lineWidth = 1;
+    for (let x = size * 0.25; x < size; x += size * 0.12) {
+      context.beginPath();
+      context.moveTo(x, size * 0.2);
+      context.lineTo(x + 6, size * 0.8);
+      context.stroke();
     }
   });
+  texture.repeat.set(1, 1);
+  return texture;
 }

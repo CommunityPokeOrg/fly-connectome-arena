@@ -1,12 +1,11 @@
 import {
   Color,
   Group,
-  Mesh,
   MeshStandardMaterial,
   Vector3,
   type Scene,
 } from 'three';
-import { clamp } from '../core/rng.ts';
+import { clamp, RNG } from '../core/rng.ts';
 import { clampToArena, resolveSphereAgainstCircle } from './collisions.ts';
 import type { MotorCommand } from '../brain/fly-brain.ts';
 import type { ArenaObstacle } from './arena.ts';
@@ -29,15 +28,22 @@ export class Fly {
   public score = 0;
   public radius = 0.62;
   public readonly muzzle = new Vector3();
-  private readonly body: Mesh;
-  private evadeTimer = 0;
   private readonly insectRig: InsectRig;
+  private turnSmoothed = 0;
+  private circleAccumulator = 0;
+  private straightTimer = 0;
+  private evadeTimer = 0;
+  private evadeSide = 1;
+  private escapeTimer = 0;
+  private escapeSide = 1;
+  private elapsed = 0;
+  private readonly rng: RNG;
 
-  public constructor(scene: Scene) {
+  public constructor(scene: Scene, rng: RNG = new RNG(1)) {
+    this.rng = rng;
     this.insectRig = createInsectMesh('fly', 0.4);
     this.insectRig.root.scale.setScalar(1.12);
     this.group.add(this.insectRig.root);
-    this.body = this.insectRig.thorax;
     this.group.position.set(0, 0.9, 0);
     scene.add(this.group);
   }
@@ -50,20 +56,63 @@ export class Fly {
     manualTurn = 0,
     manualThrust: number | undefined = undefined,
   ): FlyUpdateResult {
-    const requestedTurn = manualTurn !== 0 ? manualTurn : command.turn;
-    const thrust = manualThrust ?? command.thrust;
-    const evade = command.evade;
-    if (evade) {
-      this.evadeTimer = Math.max(this.evadeTimer, 0.22);
+    this.elapsed += dt;
+    const manual = manualTurn !== 0;
+    const requestedTurn = manual ? manualTurn : command.turn;
+    let thrust = manualThrust ?? command.thrust;
+
+    if (command.evade && this.evadeTimer <= 0) {
+      // Deterministic dodge side: hash the deci-second tick so no Math.random.
+      this.evadeSide = ((Math.floor(this.elapsed * 10) * 2654435761) >>> 0) % 2 === 0 ? 1 : -1;
+      this.evadeTimer = 0.3;
+    }
+    if (command.escape && this.escapeTimer <= 0) {
+      // Stress-driven escape jump: a stronger, longer lateral dart.
+      this.escapeSide = this.rng.chance(0.5) ? 1 : -1;
+      this.escapeTimer = 0.45;
     }
     this.evadeTimer = Math.max(0, this.evadeTimer - dt);
+    this.escapeTimer = Math.max(0, this.escapeTimer - dt);
+
     const turnRate = this.evadeTimer > 0 ? 3.7 : 2.65;
-    this.heading += requestedTurn * turnRate * dt;
+    // Smooth the neural turn request; manual steering bypasses smoothing and
+    // the circle-breaker entirely.
+    this.turnSmoothed += (requestedTurn - this.turnSmoothed) * (1 - Math.exp(-dt * 6));
+    let appliedTurn = manual ? requestedTurn : this.turnSmoothed;
+
+    // Saccade-style circle breaker: if the fly has circled almost a full loop
+    // within ~1.5 s, dart straight with full thrust for a second.
+    this.circleAccumulator = this.circleAccumulator * Math.exp(-dt / 1.5)
+      + appliedTurn * turnRate * dt;
+    if (!manual && Math.abs(this.circleAccumulator) > 0.85 * Math.PI * 2) {
+      this.straightTimer = 1.0;
+      this.circleAccumulator = 0;
+    }
+    this.straightTimer = Math.max(0, this.straightTimer - dt);
+    if (!manual && this.straightTimer > 0) {
+      appliedTurn *= 0.15;
+      thrust = 1.0;
+    }
+    // Octopamine stress makes steering erratic; escape adds a thrust burst.
+    if (!manual) {
+      appliedTurn += (this.rng.next() * 2 - 1) * command.stress * 0.9;
+    }
+    if (this.escapeTimer > 0) {
+      thrust = Math.max(thrust, 1.0);
+    }
+
+    this.heading += appliedTurn * turnRate * dt;
     const targetSpeed = 2.4 + clamp(thrust, 0, 1) * 5.6;
-    this.speed += (targetSpeed - this.speed) * Math.min(1, dt * 4.5);
+    this.speed += (targetSpeed - this.speed) * (1 - Math.exp(-dt * 4.5));
     const direction = new Vector3(Math.sin(this.heading), 0, Math.cos(this.heading));
     const lateral = new Vector3(Math.cos(this.heading), 0, -Math.sin(this.heading));
-    const dodge = this.evadeTimer > 0 ? lateral.multiplyScalar(Math.sin(this.heading * 3) * 2.2) : new Vector3();
+    const dodge = new Vector3();
+    if (this.evadeTimer > 0) {
+      dodge.addScaledVector(lateral, this.evadeSide * 2.2 * (this.evadeTimer / 0.3));
+    }
+    if (this.escapeTimer > 0) {
+      dodge.addScaledVector(lateral, this.escapeSide * 3.5 * (this.escapeTimer / 0.45));
+    }
     this.velocity.copy(direction).multiplyScalar(this.speed).add(dodge);
     this.position.addScaledVector(this.velocity, dt);
 
@@ -87,7 +136,7 @@ export class Fly {
       }
     }
     this.group.rotation.y = this.heading;
-    this.group.rotation.z = -requestedTurn * 0.09;
+    this.group.rotation.z = -appliedTurn * 0.09;
     animateInsect(this.insectRig, dt, Math.max(0.2, this.speed));
     this.updateMuzzle(direction);
     return {
@@ -131,6 +180,11 @@ export class Fly {
     this.health = 100;
     this.lives = 3;
     this.score = 0;
+    this.turnSmoothed = 0;
+    this.circleAccumulator = 0;
+    this.straightTimer = 0;
+    this.evadeTimer = 0;
+    this.escapeTimer = 0;
     this.group.visible = true;
   }
 
@@ -143,6 +197,10 @@ export class Fly {
   }
 
   public tint(color: number): void {
-    (this.body.material as MeshStandardMaterial).color = new Color(color);
+    for (const material of this.insectRig.materials) {
+      if ('color' in material && !material.userData['keepColor']) {
+        (material as MeshStandardMaterial).color = new Color(color);
+      }
+    }
   }
 }

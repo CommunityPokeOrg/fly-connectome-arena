@@ -62,7 +62,7 @@ export class Game {
   ) {
     this.brain = brain;
     this.debugWin = options.debugWin ?? false;
-    this.fly = new Fly(arena.scene);
+    this.fly = new Fly(arena.scene, arena.rng.fork(0xf17));
     this.enemies = new Enemies(arena.scene, arena.rng.fork(0x334455));
     this.hazards = new Hazards(arena.scene, arena.rng.fork(0x778899), arena.radius);
     this.sequence = new ArenaStateMachine({
@@ -144,7 +144,7 @@ export class Game {
     if (this.state === 'spectate' || this.state === 'elimination') {
       this.fly.position.lerp(new Vector3(0, 1.8, 0), Math.min(1, dt * 2.4));
       this.fly.speed = 0;
-      this.enemies.update(dt, this.fly.position, this.arena.radius);
+      this.enemies.update(dt, this.fly.position, this.fly.velocity, this.arena.radius, this.arena.obstacleEntities());
       this.sequence.update(dt);
       this.victoryCaption = this.sequence.caption;
       return;
@@ -186,15 +186,16 @@ export class Game {
       this.manualOverride ? manualThrust : undefined,
     );
     if (flyResult.damage > 0 && (flyResult.wallHit || flyResult.obstacleHit)) {
-      this.damage(flyResult.damage * dt * 3);
+      this.damage(flyResult.damage * dt * 3, 'collision');
     }
     const hazard = this.hazards.collides(this.fly.position);
     if (hazard) {
-      this.damage(hazard.damage * dt * 2.2);
+      this.damage(hazard.damage * dt * 2.2, 'collision');
     }
-    this.enemies.update(dt, this.fly.position, this.arena.radius);
+    this.enemies.update(dt, this.fly.position, this.fly.velocity, this.arena.radius, this.arena.obstacleEntities());
     this.handleEnemyCollision();
     this.handleIncomingProjectile();
+    this.punishThreatProximity(dt);
     this.handleFlyProjectileHits();
     this.handleFood();
     this.handleFiring(command);
@@ -230,7 +231,7 @@ export class Game {
       speed: 19,
       radius: 0.13,
       lifetime: 2.4,
-      color: 0x4ff6ff,
+      color: 0xf3e2b0,
     });
     this.fireCooldown = 0.16;
     this.audio.blip(520, 0.045, 'square');
@@ -245,6 +246,7 @@ export class Game {
           this.score += this.wave * 25;
           this.emit({ type: 'explosion', value: this.score });
         } else {
+          this.brain.plasticity.reward('target-hit', 0.35);
           this.emit({ type: 'hit' });
         }
         this.audio.blip(target.active ? 180 : 90, target.active ? 0.06 : 0.13, 'sawtooth');
@@ -303,12 +305,39 @@ export class Game {
       if (!enemy.active) {
         this.recordKill();
         this.score += 100 + this.wave * 25;
+      } else {
+        this.brain.plasticity.reward('target-hit', 0.35);
       }
     }
   }
 
-  private damage(amount: number): void {
+  private punishThreatProximity(dt: number): void {
+    let total = 0;
+    for (const projectile of this.enemies.projectiles.items) {
+      if (!projectile.active || projectile.owner !== 'enemy') {
+        continue;
+      }
+      const dx = projectile.mesh.position.x - this.fly.position.x;
+      const dz = projectile.mesh.position.z - this.fly.position.z;
+      if (dx * dx + dz * dz < 2.2 * 2.2) {
+        total += 0.05 * dt * 60;
+        if (total >= 0.15) {
+          break;
+        }
+      }
+    }
+    if (total > 0) {
+      this.brain.plasticity.punish('threat-proximity', Math.min(0.15, total));
+    }
+  }
+
+  private damage(amount: number, cause: 'damage' | 'collision' = 'damage'): void {
     const gameover = this.fly.takeDamage(amount);
+    if (cause === 'collision') {
+      this.brain.plasticity.punish('collision', 0.08);
+    } else {
+      this.brain.plasticity.punish('damage', clamp(amount / 20, 0.2, 1.5));
+    }
     this.emit({ type: 'damage', value: amount });
     this.audio.blip(110, 0.08, 'sawtooth');
     if (gameover) {
@@ -327,6 +356,7 @@ export class Game {
       if (distance < food.radius + this.fly.radius) {
         this.arena.collectFood(food.id);
         this.fly.heal(28);
+        this.brain.plasticity.reward('food', 1.0);
         this.score += 75;
         this.emit({ type: 'food', value: 75 });
         this.audio.blip(740, 0.16, 'sine');
@@ -345,6 +375,7 @@ export class Game {
     }
     this.wave += 1;
     this.waveKills = 0;
+    this.brain.plasticity.reward('energy', 0.8);
     this.score += this.wave * 200;
     this.emit({ type: 'wave', value: this.wave });
     this.enemies.spawnWave(this.wave, this.arena.radius);
@@ -353,6 +384,7 @@ export class Game {
   private recordKill(): void {
     this.kills += 1;
     this.waveKills += 1;
+    this.brain.plasticity.reward('target-hit', 1.2);
   }
 
   private beginVictory(): void {
