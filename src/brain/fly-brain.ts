@@ -6,8 +6,63 @@ import {
 } from './connectome.ts';
 import { LIFNetwork } from './lif.ts';
 import { PlasticityEngine } from './plasticity.ts';
+import { LocomotionCritic, type LocomotionAssessment, type LocomotionSample } from './locomotion-critic.ts';
 import { sensorDirection, type SensorReadings } from '../game/sensors.ts';
 import { signedAngleDifference } from '../core/rng.ts';
+import type { VisionFrame } from '../game/vision.ts';
+
+/** Free-space summary of one compound-eye frame, all values 0..1. */
+export interface ClearanceField {
+  /** Nearest free distance within ±20° of straight ahead. */
+  frontal: number;
+  /** Mean free distance over the left steering field (−75°..−5°). */
+  left: number;
+  /** Mean free distance over the right steering field (5°..75°). */
+  right: number;
+  /** right − left: positive means more room on the right. */
+  openness: number;
+}
+
+const FRONTAL_HALF_ANGLE = Math.PI / 9;
+const STEERING_FIELD_INNER = Math.PI / 36;
+const STEERING_FIELD_OUTER = (Math.PI * 5) / 12;
+
+/**
+ * Reduce the retinotopic ray fan to the three quantities the motor decoder
+ * cares about. Rays that hit nothing report the full range and therefore
+ * read as clearance 1.
+ */
+export function summarizeClearance(vision: VisionFrame): ClearanceField {
+  if (vision.rays.length === 0 || vision.range <= 0) {
+    return { frontal: 1, left: 1, right: 1, openness: 0 };
+  }
+  let frontal = 1;
+  let leftSum = 0;
+  let leftCount = 0;
+  let rightSum = 0;
+  let rightCount = 0;
+  for (const ray of vision.rays) {
+    const clearance = clamp(ray.distance / vision.range, 0, 1);
+    const magnitude = Math.abs(ray.angle);
+    if (magnitude <= FRONTAL_HALF_ANGLE) {
+      frontal = Math.min(frontal, clearance);
+    }
+    if (magnitude >= STEERING_FIELD_INNER && magnitude <= STEERING_FIELD_OUTER) {
+      // Weight rays nearer the heading more: they matter most for steering.
+      const weight = 1.25 - magnitude / STEERING_FIELD_OUTER;
+      if (ray.angle < 0) {
+        leftSum += clearance * weight;
+        leftCount += weight;
+      } else {
+        rightSum += clearance * weight;
+        rightCount += weight;
+      }
+    }
+  }
+  const left = leftCount > 0 ? leftSum / leftCount : 1;
+  const right = rightCount > 0 ? rightSum / rightCount : 1;
+  return { frontal, left, right, openness: clamp(right - left, -1, 1) };
+}
 
 export type BehaviorLabel =
   | 'At rest'
@@ -36,6 +91,8 @@ export interface MotorCommand {
   brakeRate: number;
   fireRate: number;
   evadeRate: number;
+  /** Compound-eye free-space summary that drove this command. */
+  clearance: ClearanceField;
 }
 
 export interface BrainStepOptions {
@@ -48,6 +105,9 @@ export class FlyBrain {
   public readonly connectome: Connectome;
   public readonly network: LIFNetwork;
   public readonly plasticity: PlasticityEngine;
+  public readonly critic: LocomotionCritic;
+  public lastAssessment: LocomotionAssessment | undefined;
+  private clearance: ClearanceField = { frontal: 1, left: 1, right: 1, openness: 0 };
   private escapeCooldown = 0;
   private escapeArmed = true;
   private readonly smoothedRates = {
@@ -72,6 +132,7 @@ export class FlyBrain {
     this.connectome = buildConnectome(seed);
     this.network = new LIFNetwork(this.connectome);
     this.plasticity = new PlasticityEngine(this.connectome, this.network);
+    this.critic = new LocomotionCritic(this.plasticity);
     this.inputCurrents = new Float32Array(this.connectome.neurons.length);
   }
 
@@ -87,7 +148,9 @@ export class FlyBrain {
     this.lastReadingsTarget = readings.target;
     this.lastReadingsThreat = readings.threat;
     this.lastReadingsLooming = readings.looming;
+    this.clearance = summarizeClearance(readings.vision);
     this.injectSensors(readings);
+    this.injectClearance(this.clearance);
     this.injectHeading(options.heading, options.headingBumpStrength ?? 22);
     this.injectTonicDrive();
     // Octopamine stress biases the network toward evasive escape.
@@ -130,6 +193,57 @@ export class FlyBrain {
       }
       this.inputCurrents[neuron] = threat + looming * 700;
     }
+  }
+
+  /**
+   * Direct raycast → motor pathway. Open space on one side excites that
+   * side's steering channel so the fly steers toward clearance before the
+   * crossed VIS reflex has to repel it from a wall; a blocked frontal field
+   * drives the brake neuron and withdraws forward drive, while a clear field
+   * adds forward drive. Every term is still decoded from DN spikes.
+   */
+  private injectClearance(field: ClearanceField): void {
+    const populations = this.connectome.populations;
+    const dn = this.connectome.dn;
+    const blockage = 1 - field.frontal;
+    const proximity = clamp(1 - Math.min(field.left, field.right, field.frontal), 0, 1);
+    const steer = field.openness * (0.35 + 0.65 * proximity);
+    const steerCurrent = Math.abs(steer) * 640;
+    if (steer > 0) {
+      this.addCurrent(dn.turnRight, steerCurrent);
+      this.addCurrent(populations.LAL_R[0] as number, steerCurrent * 0.5);
+    } else if (steer < 0) {
+      this.addCurrent(dn.turnLeft, steerCurrent);
+      this.addCurrent(populations.LAL_L[0] as number, steerCurrent * 0.5);
+    }
+    if (blockage > 0.45) {
+      const brake = (blockage - 0.45) / 0.55;
+      this.addCurrent(dn.brake, brake * brake * 900);
+      this.addCurrent(dn.forward, -brake * 420);
+      // Head-on with symmetric clearance: commit to the marginally freer
+      // side so the fly turns instead of braking into the wall.
+      if (Math.abs(field.openness) < 0.05) {
+        this.addCurrent(field.right >= field.left ? dn.turnRight : dn.turnLeft, brake * 380);
+      }
+    } else {
+      this.addCurrent(dn.forward, field.frontal * 180);
+    }
+  }
+
+  private addCurrent(neuron: number, amount: number): void {
+    this.inputCurrents[neuron] = (this.inputCurrents[neuron] ?? 0) + amount;
+  }
+
+  /**
+   * Feed the body's actual kinematics back into the neuromodulator system.
+   * Call once per frame after the fly has moved.
+   */
+  public observeLocomotion(sample: Omit<LocomotionSample, 'frontalClearance'>, dt: number): LocomotionAssessment {
+    this.lastAssessment = this.critic.observe(
+      { ...sample, frontalClearance: this.clearance.frontal },
+      dt,
+    );
+    return this.lastAssessment;
   }
 
   private injectHeading(heading: number, strength: number): void {
@@ -243,6 +357,7 @@ export class FlyBrain {
       brakeRate: rates.brake,
       fireRate: rates.fire,
       evadeRate: rates.evade,
+      clearance: { ...this.clearance },
     };
   }
 
@@ -266,6 +381,9 @@ export class FlyBrain {
       this.smoothedRates[key] = 0;
     }
     this.plasticity.reset();
+    this.critic.reset();
+    this.lastAssessment = undefined;
+    this.clearance = { frontal: 1, left: 1, right: 1, openness: 0 };
     this.lastReadingsOlfactory = [];
     this.lastReadingsTarget = [];
     this.lastReadingsThreat = [];
@@ -289,6 +407,7 @@ export class FlyBrain {
       brakeRate: 0,
       fireRate: 0,
       evadeRate: 0,
+      clearance: { frontal: 1, left: 1, right: 1, openness: 0 },
     };
   }
 

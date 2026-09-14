@@ -9,7 +9,13 @@ export type RewardKind =
   | 'energy'
   | 'damage'
   | 'threat-proximity'
-  | 'collision';
+  | 'collision'
+  | 'locomotion'
+  | 'progress'
+  | 'exploration'
+  | 'wall-approach'
+  | 'stuck'
+  | 'circling';
 
 export interface RewardEvent {
   time: number;
@@ -196,6 +202,34 @@ export class PlasticityEngine {
     this.punishmentRate += amount;
     this.punishmentsDelivered += 1;
     this.pushEvent({ time: this.time, kind, value: -amount });
+  }
+
+  /**
+   * Low-amplitude appetitive signal delivered every frame (e.g. smooth
+   * locomotion). Events coalesce and the delivery counter is not touched so
+   * the telemetry keeps counting discrete rewards only.
+   */
+  public rewardContinuous(kind: RewardKind, value: number): void {
+    const amount = Math.max(0, value);
+    if (amount <= 1e-6) {
+      return;
+    }
+    this.dopamine = Math.min(3, this.dopamine + amount);
+    this.serotonin = Math.min(2, this.serotonin + amount * 0.18);
+    this.rewardRate += amount;
+    this.pushEvent({ time: this.time, kind, value: amount }, true);
+  }
+
+  /** Low-amplitude aversive signal delivered every frame; see `rewardContinuous`. */
+  public punishContinuous(kind: RewardKind, value: number): void {
+    const amount = Math.max(0, value);
+    if (amount <= 1e-6) {
+      return;
+    }
+    this.octopamine = Math.min(3, this.octopamine + amount);
+    this.serotonin = Math.max(0, this.serotonin - amount * 0.08);
+    this.punishmentRate += amount;
+    this.pushEvent({ time: this.time, kind, value: -amount }, true);
   }
 
   /**
