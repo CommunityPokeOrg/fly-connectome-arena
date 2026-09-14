@@ -97,6 +97,30 @@ Heading injects a bump into CX, whose small outputs provide persistence.
 Tonic forward drive still enters `DN_forward`, so every motor output is
 decoded from spikes.
 
+The compound-eye ray fan also feeds the motor layer directly
+(`summarizeClearance` in `brain/fly-brain.ts`): open space on one side
+excites that side's steering channel and LAL, a blocked frontal field drives
+`DN_brake` and withdraws forward drive, and a clear field adds forward drive.
+This makes wall avoidance proactive instead of a bump-and-reflect reflex.
+
+## Training loop
+
+`brain/locomotion-critic.ts` turns the body's kinematics into neuromodulator
+signals every frame, alongside the game-event rewards (sucrose, hits, waves):
+
+* **Dopamine** for smooth linear locomotion (fast, straight, low steering
+  jerk), forward progress along the heading, and entering a zone not visited
+  in the last 25 s.
+* **Octopamine / serotonin drop** for wall and obstacle contact, racing at a
+  wall the eye can already see, being stuck (thrust commanded but under
+  0.8 units of displacement over 1.5 s), and spinning in a tight circle (more than 1.5
+  turns of accumulated rotation with under 3.5 units of net displacement).
+
+The resulting stress drive already feeds erratic steering and escape bursts,
+so the penalties close the loop: a circling or stuck fly is pushed into a new
+heading, and the three-factor rule reinforces the vision → steering synapses
+that were active during rewarded straight flight.
+
 The LIF network uses `dt = 1 ms`, 20 ms membrane time constant, 18 ms
 synaptic-current decay, a two millisecond refractory period, a precise
 100 ms firing-rate window, and a rolling two-second per-neuron spike-time
@@ -123,6 +147,11 @@ npm run preview
 The tests cover seeded RNG behavior, LIF repeatability and raster history,
 collision primitives, connectome determinism, and a 3000-tick headless
 behavior run that checks arena bounds, activity, and firing.
+
+`npm run verify:headless` runs the closed-loop checks only: reward shaping
+and penalty units, raycast-to-motor steering, and seeded 40 s Fly + FlyBrain
+runs through a pillar field that assert bit-for-bit determinism, low contact
+rate, no sustained tight loops, and exploration coverage.
 
 ## Victory sequence
 

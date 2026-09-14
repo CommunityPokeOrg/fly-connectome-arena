@@ -198,8 +198,18 @@ export class Game {
       this.arena.radius,
       this.arena.obstacles,
     );
+    this.brain.observeLocomotion({
+      x: this.fly.position.x,
+      z: this.fly.position.z,
+      heading: this.fly.heading,
+      speed: this.fly.speed,
+      turn: command.turn,
+      thrust: command.thrust,
+      wallHit: flyResult.wallHit,
+      obstacleHit: flyResult.obstacleHit,
+    }, dt);
     if (flyResult.damage > 0 && (flyResult.wallHit || flyResult.obstacleHit)) {
-      this.damage(flyResult.damage * dt * 3, 'collision');
+      this.damage(flyResult.damage * dt * 3, 'contact');
     }
     const hazard = this.hazards.collides(this.fly.position);
     if (hazard) {
@@ -329,11 +339,15 @@ export class Game {
     }
   }
 
-  private damage(amount: number, cause: 'damage' | 'collision' = 'damage'): void {
+  /**
+   * `contact` is body-versus-arena damage whose aversive signal the
+   * locomotion critic already delivered, so it only costs health here.
+   */
+  private damage(amount: number, cause: 'damage' | 'collision' | 'contact' = 'damage'): void {
     const gameover = this.fly.takeDamage(amount);
     if (cause === 'collision') {
       this.brain.plasticity.punish('collision', 0.08);
-    } else {
+    } else if (cause === 'damage') {
       this.brain.plasticity.punish('damage', clamp(amount / 20, 0.2, 1.5));
     }
     this.emit({ type: 'damage', value: amount });

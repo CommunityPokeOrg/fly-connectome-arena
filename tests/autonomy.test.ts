@@ -21,6 +21,7 @@ const stillCommand: MotorCommand = {
   brakeRate: 0,
   fireRate: 0,
   evadeRate: 0,
+  clearance: { frontal: 1, left: 1, right: 1, openness: 0 },
 };
 
 describe('autonomous fly', () => {

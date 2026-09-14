@@ -98,6 +98,12 @@ const EVENT_LABELS: Record<RewardEvent['kind'], string> = {
   damage: 'damage',
   'threat-proximity': 'projectile proximity',
   collision: 'collision',
+  locomotion: 'smooth locomotion',
+  progress: 'forward progress',
+  exploration: 'new zone explored',
+  'wall-approach': 'wall approach',
+  stuck: 'stuck',
+  circling: 'tight circling',
 };
 
 /**

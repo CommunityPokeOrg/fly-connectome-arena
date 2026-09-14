@@ -8,7 +8,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "verify:headless": "vitest run tests/headless-behavior.test.ts tests/vision-motor.test.ts tests/locomotion-critic.test.ts"
   },
   "dependencies": {
     "three": "0.179.1"
