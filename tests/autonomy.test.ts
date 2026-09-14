@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Scene, Object3D } from 'three';
 import { readFileSync } from 'node:fs';
 import { Fly } from '../src/game/fly.ts';
+import { FlyBrain } from '../src/brain/fly-brain.ts';
 import type { ArenaObstacle } from '../src/game/arena.ts';
 import type { MotorCommand } from '../src/brain/fly-brain.ts';
 
@@ -10,6 +11,7 @@ const stillCommand: MotorCommand = {
   thrust: 0.6,
   fire: false,
   evade: false,
+  behavior: 'At rest',
   stress: 0,
   escape: false,
   leftRate: 0,
@@ -70,5 +72,46 @@ describe('autonomous fly', () => {
       const result = fly.update(1 / 60, command, 18, [obstacle]);
       expect(result.obstacleHit).toBe(false);
     }
+  });
+});
+
+describe('graded decoder + escape hysteresis', () => {
+  const oneSidedOdor = {
+    visual: new Array(24).fill(0),
+    target: new Array(12).fill(0),
+    olfactory: Object.assign(new Array(16).fill(0), { 12: 1 }),
+    threat: new Array(8).fill(0),
+    nearestEnemyAngle: 0,
+    nearestFoodAngle: 0,
+  };
+
+  it('olfactory steering produces a graded, non-saturated turn', () => {
+    const brain = new FlyBrain(7);
+    let command = brain.step(oneSidedOdor, { heading: 0, steps: 16 });
+    for (let step = 0; step < 3 * 60; step += 1) {
+      command = brain.step(oneSidedOdor, { heading: 0, steps: 16 });
+    }
+    expect(Math.abs(command.turn)).toBeGreaterThan(0);
+    expect(Math.abs(command.turn)).toBeLessThan(0.999);
+    expect([
+      'At rest',
+      'Foraging flight',
+      'Turning left',
+      'Turning right',
+      'Evasive burst',
+      'Escape flight',
+    ]).toContain(command.behavior);
+  });
+
+  it('escape fires at most once under continuously high stress', () => {
+    const brain = new FlyBrain(7);
+    let escapeFrames = 0;
+    for (let step = 0; step < 2 * 60; step += 1) {
+      brain.plasticity.punish('damage', 3);
+      const command = brain.step(oneSidedOdor, { heading: 0, steps: 16 });
+      if (command.escape) escapeFrames += 1;
+    }
+    expect(escapeFrames).toBeGreaterThan(0);
+    expect(escapeFrames).toBeLessThanOrEqual(3);
   });
 });

@@ -1,4 +1,4 @@
-import { clamp } from '../core/rng.ts';
+import { clamp, relax } from '../core/rng.ts';
 import {
   buildConnectome,
   type Connectome,
@@ -8,11 +8,21 @@ import { LIFNetwork } from './lif.ts';
 import { PlasticityEngine } from './plasticity.ts';
 import type { SensorReadings } from '../game/sensors.ts';
 
+export type BehaviorLabel =
+  | 'At rest'
+  | 'Foraging flight'
+  | 'Turning left'
+  | 'Turning right'
+  | 'Evasive burst'
+  | 'Escape flight';
+
 export interface MotorCommand {
   turn: number;
   thrust: number;
   fire: boolean;
   evade: boolean;
+  /** Human-readable autonomous behavior state for telemetry. */
+  behavior: BehaviorLabel;
   /** 0..1 octopamine stress drive for erratic evasion. */
   stress: number;
   /** One-shot escape burst when stress crosses the threshold. */
@@ -36,6 +46,15 @@ export class FlyBrain {
   public readonly network: LIFNetwork;
   public readonly plasticity: PlasticityEngine;
   private escapeCooldown = 0;
+  private escapeArmed = true;
+  private readonly smoothedRates = {
+    turnLeft: 0,
+    turnRight: 0,
+    forward: 0,
+    brake: 0,
+    fire: 0,
+    evade: 0,
+  };
   public readonly inputCurrents: Float32Array;
   public lastSpikes: number[] = [];
   public command: MotorCommand = FlyBrain.neutralCommand();
@@ -74,7 +93,7 @@ export class FlyBrain {
     this.plasticity.observeOdor(Math.max(0, ...readings.olfactory), dt);
     this.plasticity.update(dt);
     this.stepCounter += steps;
-    this.command = this.decode();
+    this.command = this.decode(dt);
     return this.command;
   }
 
@@ -129,38 +148,73 @@ export class FlyBrain {
     return sum / neurons.length;
   }
 
-  private decode(): MotorCommand {
-    const turnLeft = this.network.firingRates[this.connectome.dn.turnLeft] ?? 0;
-    const turnRight = this.network.firingRates[this.connectome.dn.turnRight] ?? 0;
-    const forwardRate = this.network.firingRates[this.connectome.dn.forward] ?? 0;
-    const brakeRate = this.network.firingRates[this.connectome.dn.brake] ?? 0;
-    const fireRate = this.network.firingRates[this.connectome.dn.fire] ?? 0;
-    const evadeRate = this.network.firingRates[this.connectome.dn.evade] ?? 0;
-    const turn = clamp((turnRight - turnLeft) / 40, -1, 1);
-    const turnWithDeadzone = Math.abs(turn) < 0.06 ? 0 : turn;
-    const thrust = clamp(0.3 + (forwardRate - brakeRate) / 45, 0.12, 1);
-    const fire = fireRate > 2 && this.fireCooldown <= 0;
+  // Rate decoder adapted from Xenova/fruit-fly-simulation controller.js (MIT); see ASSETS.md
+  private decode(dt: number): MotorCommand {
+    const raw = {
+      turnLeft: this.network.firingRates[this.connectome.dn.turnLeft] ?? 0,
+      turnRight: this.network.firingRates[this.connectome.dn.turnRight] ?? 0,
+      forward: this.network.firingRates[this.connectome.dn.forward] ?? 0,
+      brake: this.network.firingRates[this.connectome.dn.brake] ?? 0,
+      fire: this.network.firingRates[this.connectome.dn.fire] ?? 0,
+      evade: this.network.firingRates[this.connectome.dn.evade] ?? 0,
+    };
+    // 80 ms exponential smoothing per descending-neuron rate.
+    const rates = this.smoothedRates;
+    for (const key of Object.keys(rates) as (keyof typeof rates)[]) {
+      rates[key] = relax(rates[key], Math.max(0, raw[key]), dt, 0.08);
+    }
+    // Sign convention: positive turn increases heading; heading 0 faces +z
+    // and positive yaw rotates forward toward +x, which the chase/top-down
+    // cameras render as a right turn — so turn > 0 means "Turning right".
+    const turnDrive = Math.max(0, rates.turnRight - 15) - Math.max(0, rates.turnLeft - 15);
+    const turn = Math.tanh(turnDrive / 45);
+    const thrust = clamp(
+      0.25
+        + 0.75 * Math.tanh(Math.max(0, rates.forward - 20) / 120)
+        - 0.35 * Math.tanh(Math.max(0, rates.brake - 25) / 90),
+      0.12,
+      1,
+    );
+    const fire = raw.fire > 2 && this.fireCooldown <= 0;
     if (fire) {
       this.fireCooldown = 0.2;
     }
     const stress = this.plasticity.stress;
-    const escape = stress > 0.55 && this.escapeCooldown <= 0;
+    // Escape arm/disarm hysteresis: re-arms only once stress subsides.
+    if (stress < 0.3) {
+      this.escapeArmed = true;
+    }
+    const escape = this.escapeArmed && stress > 0.55 && this.escapeCooldown <= 0;
     if (escape) {
+      this.escapeArmed = false;
       this.escapeCooldown = 0.9;
     }
+    const evade = rates.evade > 8;
+    const behavior: BehaviorLabel = escape
+      ? 'Escape flight'
+      : evade
+        ? 'Evasive burst'
+        : Math.abs(turn) > 0.3
+          ? turn < 0
+            ? 'Turning left'
+            : 'Turning right'
+          : thrust > 0.35
+            ? 'Foraging flight'
+            : 'At rest';
     return {
-      turn: turnWithDeadzone,
+      turn,
       thrust,
       fire,
-      evade: evadeRate > 8,
+      evade,
+      behavior,
       stress,
       escape,
-      leftRate: turnLeft,
-      rightRate: turnRight,
-      forwardRate,
-      brakeRate,
-      fireRate,
-      evadeRate,
+      leftRate: rates.turnLeft,
+      rightRate: rates.turnRight,
+      forwardRate: rates.forward,
+      brakeRate: rates.brake,
+      fireRate: rates.fire,
+      evadeRate: rates.evade,
     };
   }
 
@@ -179,6 +233,10 @@ export class FlyBrain {
     this.command = FlyBrain.neutralCommand();
     this.fireCooldown = 0;
     this.escapeCooldown = 0;
+    this.escapeArmed = true;
+    for (const key of Object.keys(this.smoothedRates) as (keyof typeof this.smoothedRates)[]) {
+      this.smoothedRates[key] = 0;
+    }
     this.plasticity.reset();
     this.stepCounter = 0;
   }
@@ -189,6 +247,7 @@ export class FlyBrain {
       thrust: 0.5,
       fire: false,
       evade: false,
+      behavior: 'At rest',
       stress: 0,
       escape: false,
       leftRate: 0,

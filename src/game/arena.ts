@@ -231,8 +231,15 @@ export class Arena {
       'kit-floor',
       placements,
       new BoxGeometry(2, 0.1, 2),
-      new MeshStandardMaterial({ color: 0x8e8f99, roughness: 0.95, metalness: 0, emissiveIntensity: 0 }),
+      new MeshStandardMaterial({ color: 0xb9bcc4, roughness: 0.95, metalness: 0, emissiveIntensity: 0 }),
     );
+    // Tone down the kit floor's near-white material so it doesn't glare.
+    floor.traverse((node) => {
+      const mesh = node as Mesh;
+      if (!mesh.isMesh) return;
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const material of materials) (material as MeshStandardMaterial).color?.set(0xb9bcc4);
+    });
     this.scene.add(floor);
   }
 

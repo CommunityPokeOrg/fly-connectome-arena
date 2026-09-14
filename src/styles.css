@@ -196,9 +196,10 @@ h1 { margin: 10px 0 14px; color: var(--text); font-size: clamp(26px, 3.6vw, 40px
 .motor-name { color: var(--muted); }
 .motor-track { height: 6px; border-radius: 3px; background: var(--line-soft); overflow: hidden; }
 .motor-track i { display: block; height: 100%; width: 0; background: var(--text); opacity: 0.75; transition: width 0.08s linear; }
-.motor-value { text-align: right; color: var(--text); font-family: var(--mono); }
-.motor-readout.firing .motor-row:nth-child(5) .motor-track i { background: var(--accent); opacity: 1; }
-.motor-readout.evading .motor-row:nth-child(6) .motor-track i { background: var(--clay); opacity: 1; }
+.motor-value, .behavior-value { text-align: right; color: var(--text); font-family: var(--mono); }
+.behavior-label { display: flex; justify-content: space-between; font-size: 10px; padding-bottom: 4px; border-bottom: 1px solid var(--line-soft); }
+.motor-readout.firing .motor-row:nth-child(6) .motor-track i { background: var(--accent); opacity: 1; }
+.motor-readout.evading .motor-row:nth-child(7) .motor-track i { background: var(--clay); opacity: 1; }
 
 .event-log ol { list-style: none; padding: 0; display: grid; gap: 4px; }
 .event-log li { display: grid; grid-template-columns: 48px 1fr auto; gap: 8px; font-size: 10px; color: var(--muted); }

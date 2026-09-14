@@ -156,7 +156,7 @@ export class HUD {
     this.healthFill.parentElement?.classList.toggle('low', health < 30);
     this.healthValue.textContent = `${Math.round(health)}%`;
     const state = this.game.state === 'playing'
-      ? `${this.game.paused ? 'Paused' : 'Autonomous · connectome'} · ${this.game.simulationSpeed.toFixed(1)}×${this.muted ? ' · muted' : ''}`
+      ? `${this.game.paused ? 'Paused' : `Autonomous · ${this.game.brain.command.behavior}`} · ${this.game.simulationSpeed.toFixed(1)}×${this.muted ? ' · muted' : ''}`
       : this.game.state.charAt(0).toUpperCase() + this.game.state.slice(1);
     this.status.textContent = state;
     const fpsNode = this.root.querySelector('.fps-value');

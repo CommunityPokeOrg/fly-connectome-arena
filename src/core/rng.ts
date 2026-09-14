@@ -67,6 +67,11 @@ export function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
 }
 
+/** Exponential approach toward a target; frame-rate independent. */
+export function relax(value: number, target: number, dt: number, tau: number): number {
+  return value + (target - value) * (1 - Math.exp(-dt / tau));
+}
+
 export function lerp(from: number, to: number, amount: number): number {
   return from + (to - from) * amount;
 }

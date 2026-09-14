@@ -118,6 +118,7 @@ export class ConnectomeVisualizer {
   private readonly motorRows = new Map<string, MotorRow>();
   private turnNeedle!: HTMLElement;
   private thrustFill!: HTMLElement;
+  private behaviorValue!: HTMLElement;
   private cssWidth = 380;
   private dpr = 1;
   private layout: Layout = this.computeLayout();
@@ -212,13 +213,18 @@ export class ConnectomeVisualizer {
     this.motorReadout.append(gauges);
     const table = document.createElement('div');
     table.className = 'motor-table';
+    const behavior = document.createElement('div');
+    behavior.className = 'behavior-label';
+    behavior.innerHTML = '<span class="motor-name">Behavior</span><span class="behavior-value">At rest</span>';
+    this.behaviorValue = behavior.querySelector('.behavior-value') as HTMLElement;
+    table.append(behavior);
     for (const [key, label] of [
-      ['leftRate', 'DN turn-L'],
-      ['rightRate', 'DN turn-R'],
-      ['forwardRate', 'DN forward'],
-      ['brakeRate', 'DN brake'],
+      ['leftRate', 'DN turn-L (DNa02-like)'],
+      ['rightRate', 'DN turn-R (DNa02-like)'],
+      ['forwardRate', 'DN forward (DNp09-like)'],
+      ['brakeRate', 'DN brake (MDN-like)'],
       ['fireRate', 'DN fire'],
-      ['evadeRate', 'DN evade'],
+      ['evadeRate', 'DN evade (DNp01/GF-like)'],
     ] as const) {
       const row = document.createElement('div');
       row.className = 'motor-row';
@@ -743,6 +749,9 @@ export class ConnectomeVisualizer {
     this.thrustFill.style.width = `${Math.max(0, Math.min(1, command.thrust)) * 100}%`;
     this.motorReadout.classList.toggle('firing', command.fire);
     this.motorReadout.classList.toggle('evading', command.evade);
+    if (this.behaviorValue.textContent !== command.behavior) {
+      this.behaviorValue.textContent = command.behavior;
+    }
   }
 
   private paintEvents(plasticity: PlasticitySnapshot): void {

@@ -119,3 +119,26 @@ falls back to the analytic lights and flat materials.
 Models that were only available under CC-BY or unclear terms were
 excluded. Sketchfab and Smithsonian 3D were not used because their per-asset
 license pages could not be verified from this environment.
+
+## Adapted design references
+
+[Xenova / fruit-fly-simulation](https://huggingface.co/spaces/Xenova/fruit-fly-simulation)
+(author: Xenova, Hugging Face). The Space's original application code
+(`controller.js` et al.) is MIT-licensed per its LICENSE/README; the
+MaleCNS connectome data it ships is CC BY 4.0 and is **not** used here.
+
+Adapted patterns (no code, data, or assets were copied):
+
+* Graded `tanh` rate decoder: per-descending-neuron exponential rate
+  smoothing with an 80 ms time constant, thresholded bilateral
+  turn-difference (`max(0, R-15) - max(0, L-15)`, `tanh(drive/45)`), and a
+  thresholded forward/brake thrust blend (`controller.js`
+  `FlyController.advance`).
+* Escape arm/disarm hysteresis: escape re-arms only after stress falls
+  below a lower threshold, so a sustained threat produces one burst, not a
+  held state.
+* Behavior-label telemetry (`At rest`, `Foraging flight`, `Turning
+  left/right`, `Evasive burst`, `Escape flight`) shown in the motor-decode
+  readout and the HUD status line.
+* Descending-neuron homolog naming hints in the telemetry table
+  (DNa02, DNp09, MDN, DNp01/GF), applied to our toy connectome's DNs.

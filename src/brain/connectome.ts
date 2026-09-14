@@ -168,6 +168,12 @@ export function buildConnectome(seed: number | string): Connectome {
   // Olfactory processing is bilateral and sparse: the PN/KC pathway makes ORN
   // direction influence the mushroom-body halves.
   connectProbability('ORN', 'PN', 0.58, 4.4);
+  // Lateralized odor steering: each olfactory bin biases the steering
+  // channel on its own side, so a source to the right turns right.
+  for (const [index, source] of populations.ORN.entries()) {
+    add(source, (index < 8 ? populations.LAL_L[0] : populations.LAL_R[0]) as number, 1.6);
+    add(source, (index < 8 ? populations.DN[0] : populations.DN[1]) as number, 12.0);
+  }
   connectProbability('PN', 'KC', 0.22, 2.2);
   connectProbability('KC', 'MBON', 0.32, 2.5);
 

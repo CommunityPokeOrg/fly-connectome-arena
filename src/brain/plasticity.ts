@@ -215,8 +215,8 @@ export class PlasticityEngine {
     if (delta <= 0.002 || dt <= 0) {
       return 0;
     }
-    const gain = Math.min(0.25, (delta / dt) * 0.05 * level);
-    if (gain > 0.004) {
+    const gain = Math.min(0.06, (delta / dt) * 0.015 * level);
+    if (gain > 0.003) {
       this.dopamine = Math.min(3, this.dopamine + gain);
       this.rewardRate += gain;
       this.pushEvent({ time: this.time, kind: 'odor-gradient', value: gain }, true);
